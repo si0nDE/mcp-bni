@@ -24,13 +24,13 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'de',
     countryCode: 'DE',
-    label: 'Deutschland',
+    label: 'Germany',
     languages: [{ locale: 'de-DE', findMemberUrl: 'https://bni.de/de/mitgliedfinden' }],
   },
   {
     id: 'at',
     countryCode: 'AT',
-    label: 'Österreich',
+    label: 'Austria',
     languages: [{ locale: 'de-DE', findMemberUrl: 'https://bni.de/de/mitgliedfinden' }],
   },
   // Switzerland: one site, three language variants (confirmed pattern from
@@ -38,7 +38,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'ch',
     countryCode: 'CH',
-    label: 'Schweiz & Liechtenstein',
+    label: 'Switzerland & Liechtenstein',
     languages: [
       { locale: 'de-CH', findMemberUrl: 'https://bni.swiss/de-CH/findamember' },
       { locale: 'fr-CH', findMemberUrl: 'https://bni.swiss/fr-CH/findamember' },
@@ -48,7 +48,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'fr',
     countryCode: 'FR',
-    label: 'Frankreich',
+    label: 'France',
     languages: [{ locale: 'fr', findMemberUrl: 'https://bnifrance.fr/fr/trouverunmembre' }],
   },
   {
@@ -60,7 +60,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'gr',
     countryCode: 'GR',
-    label: 'Griechenland',
+    label: 'Greece',
     languages: [{ locale: 'el', findMemberUrl: 'https://bni.bni-greece.com/el/findamember' }],
   },
 
@@ -68,13 +68,13 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'gb',
     countryCode: 'GB',
-    label: 'Vereinigtes Königreich',
+    label: 'United Kingdom',
     languages: [{ locale: 'en-GB', findMemberUrl: 'https://bni.co.uk/en-GB/findamember' }],
   },
   {
     id: 'ie',
     countryCode: 'IE',
-    label: 'Irland',
+    label: 'Ireland',
     languages: [{ locale: 'en-IE', findMemberUrl: 'https://bni.ie/en-IE/findamember' }],
   },
   // Belgium: two independent regional sites on different domains (Flemish
@@ -84,25 +84,25 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'be-nl',
     countryCode: 'BE',
-    label: 'Belgien (Flämisch)',
+    label: 'Belgium (Flemish)',
     languages: [{ locale: 'nl', findMemberUrl: 'https://bni-vlaanderen.be/nl/zoekeenlid' }],
   },
   {
     id: 'be-fr',
     countryCode: 'BE',
-    label: 'Belgien (Französisch)',
+    label: 'Belgium (French)',
     languages: [{ locale: 'fr', findMemberUrl: 'https://bnibelgique.be/fr/trouverunmembre' }],
   },
   {
     id: 'nl',
     countryCode: 'NL',
-    label: 'Niederlande',
+    label: 'Netherlands',
     languages: [{ locale: 'nl', findMemberUrl: 'https://bni-nederland.nl/nl/zoekeenlid' }],
   },
   {
     id: 'lu',
     countryCode: 'LU',
-    label: 'Luxemburg',
+    label: 'Luxembourg',
     languages: [{ locale: 'fr', findMemberUrl: 'https://bniluxembourg.lu/fr/trouverunmembre' }],
   },
   {
@@ -114,37 +114,37 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'it',
     countryCode: 'IT',
-    label: 'Italien',
+    label: 'Italy',
     languages: [{ locale: 'en-GB', findMemberUrl: 'https://bni-italia.com/en-GB/findamember' }],
   },
   {
     id: 'se',
     countryCode: 'SE',
-    label: 'Schweden',
+    label: 'Sweden',
     languages: [{ locale: 'sv', findMemberUrl: 'https://bni.nu/sv/vemarmed' }],
   },
   {
     id: 'dk',
     countryCode: 'DK',
-    label: 'Dänemark',
+    label: 'Denmark',
     languages: [{ locale: 'da', findMemberUrl: 'https://bni.as/da/findforretningspartner' }],
   },
   {
     id: 'no',
     countryCode: 'NO',
-    label: 'Norwegen',
+    label: 'Norway',
     languages: [{ locale: 'nb', findMemberUrl: 'https://bni.no/nb/finnenforretningspartner' }],
   },
   {
     id: 'fi',
     countryCode: 'FI',
-    label: 'Finnland',
+    label: 'Finland',
     languages: [{ locale: 'fi', findMemberUrl: 'https://bni.fi/fi/etsiliikekumppani' }],
   },
   {
     id: 'pl',
     countryCode: 'PL',
-    label: 'Polen',
+    label: 'Poland',
     // The URL itself carries no language segment (https://bnipolska.pl/znajdz-osobe/);
     // judgment call: locale set to "pl" to match the site's sole (Polish) language.
     languages: [{ locale: 'pl', findMemberUrl: 'https://bnipolska.pl/znajdz-osobe/' }],
@@ -152,75 +152,75 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'cz',
     countryCode: 'CZ',
-    label: 'Tschechien',
+    label: 'Czechia',
     languages: [{ locale: 'cs', findMemberUrl: 'https://bni-czechia.com/cs/findamember' }],
   },
   {
     id: 'sk',
     countryCode: 'SK',
-    label: 'Slowakei',
+    label: 'Slovakia',
     // Source is HTTP-only in the research doc (HTTPS has a certificate error) — transcribed as-is.
     languages: [{ locale: 'sk-SK', findMemberUrl: 'http://bni.sk/sk-SK/findamember' }],
   },
   {
     id: 'hu',
     countryCode: 'HU',
-    label: 'Ungarn',
+    label: 'Hungary',
     languages: [{ locale: 'hu-HU', findMemberUrl: 'https://bni-hungary.com/hu-HU/findamember' }],
   },
   {
     id: 'ro',
     countryCode: 'RO',
-    label: 'Rumänien',
+    label: 'Romania',
     languages: [{ locale: 'ro-RO', findMemberUrl: 'https://bni-romania.com/ro-RO/gasesteunmembru' }],
   },
   {
     id: 'hr',
     countryCode: 'HR',
-    label: 'Kroatien',
+    label: 'Croatia',
     languages: [{ locale: 'hr-HR', findMemberUrl: 'https://bni-croatia.com/hr-HR/findamember' }],
   },
   {
     id: 'si',
     countryCode: 'SI',
-    label: 'Slowenien',
+    label: 'Slovenia',
     languages: [{ locale: 'sl', findMemberUrl: 'https://bni-slovenia.com/sl/findamember' }],
   },
   {
     id: 'rs',
     countryCode: 'RS',
-    label: 'Serbien',
+    label: 'Serbia',
     // HTTP-only, transcribed as-is from the research doc.
     languages: [{ locale: 'sr-Latn-RS', findMemberUrl: 'http://bni-serbia.com/sr-Latn-RS/findamember' }],
   },
   {
     id: 'bg',
     countryCode: 'BG',
-    label: 'Bulgarien',
+    label: 'Bulgaria',
     languages: [{ locale: 'bg', findMemberUrl: 'https://bni.bg/bg/findamember' }],
   },
   {
     id: 'lv',
     countryCode: 'LV',
-    label: 'Lettland',
+    label: 'Latvia',
     languages: [{ locale: 'lv', findMemberUrl: 'https://bni.lv/lv/findamember' }],
   },
   {
     id: 'lt',
     countryCode: 'LT',
-    label: 'Litauen',
+    label: 'Lithuania',
     languages: [{ locale: 'en', findMemberUrl: 'https://bni.lt/en/findamember' }],
   },
   {
     id: 'ee',
     countryCode: 'EE',
-    label: 'Estland',
+    label: 'Estonia',
     languages: [{ locale: 'et', findMemberUrl: 'https://bni.ee/et/leialiige' }],
   },
   {
     id: 'tr',
     countryCode: 'TR',
-    label: 'Türkei',
+    label: 'Turkey',
     languages: [{ locale: 'tr', findMemberUrl: 'https://bni.com.tr/tr/findamember' }],
   },
 
@@ -230,7 +230,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'ca',
     countryCode: 'CA',
-    label: 'Kanada',
+    label: 'Canada',
     languages: [
       { locale: 'en-CA', findMemberUrl: 'https://bnicanada.ca/en-CA/findamember' },
       { locale: 'fr-CA', findMemberUrl: 'https://bnicanada.ca/fr-CA/findamember' },
@@ -241,13 +241,13 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'mx',
     countryCode: 'MX',
-    label: 'Mexiko',
+    label: 'Mexico',
     languages: [{ locale: 'es-MX', findMemberUrl: 'https://bnimexico.com/es-MX/encuentraunmiembro' }],
   },
   {
     id: 'co',
     countryCode: 'CO',
-    label: 'Kolumbien',
+    label: 'Colombia',
     languages: [{ locale: 'es-CO', findMemberUrl: 'https://bnicolombia.com/es-CO/encuentra-un-miembro' }],
   },
   {
@@ -287,7 +287,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'ae',
     countryCode: 'AE',
-    label: 'VAE',
+    label: 'United Arab Emirates',
     languages: [{ locale: 'en-AE', findMemberUrl: 'https://bni.ae/en-AE/findamember' }],
   },
   {
@@ -299,7 +299,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'za',
     countryCode: 'ZA',
-    label: 'Südafrika',
+    label: 'South Africa',
     languages: [{ locale: 'en-ZA', findMemberUrl: 'https://bni.co.za/en-ZA/findamember' }],
   },
   {
@@ -317,7 +317,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'ke',
     countryCode: 'KE',
-    label: 'Kenia',
+    label: 'Kenya',
     languages: [{ locale: 'en-GB', findMemberUrl: 'https://bnikenya.com/en-GB/findamember' }],
   },
   {
@@ -331,25 +331,25 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'au',
     countryCode: 'AU',
-    label: 'Australien',
+    label: 'Australia',
     languages: [{ locale: 'en-AU', findMemberUrl: 'https://events.bni.com.au/en-AU/findamember' }],
   },
   {
     id: 'nz',
     countryCode: 'NZ',
-    label: 'Neuseeland',
+    label: 'New Zealand',
     languages: [{ locale: 'en-NZ', findMemberUrl: 'https://bni.co.nz/en-NZ/findamember' }],
   },
   {
     id: 'in',
     countryCode: 'IN',
-    label: 'Indien',
+    label: 'India',
     languages: [{ locale: 'en-IN', findMemberUrl: 'https://bni-india.in/en-IN/findamember' }],
   },
   {
     id: 'sg',
     countryCode: 'SG',
-    label: 'Singapur',
+    label: 'Singapore',
     languages: [{ locale: 'en-SG', findMemberUrl: 'https://bni.com.sg/en-SG/findamember' }],
   },
   {
@@ -367,7 +367,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'hk',
     countryCode: 'HK',
-    label: 'Hongkong',
+    label: 'Hong Kong',
     languages: [{ locale: 'en-HK', findMemberUrl: 'https://bni.hk/en-HK/findamember' }],
   },
   {
@@ -388,13 +388,13 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'kr',
     countryCode: 'KR',
-    label: 'Südkorea',
+    label: 'South Korea',
     languages: [{ locale: 'ko', findMemberUrl: 'https://bnikorea.com/ko/findamember' }],
   },
   {
     id: 'ph',
     countryCode: 'PH',
-    label: 'Philippinen',
+    label: 'Philippines',
     languages: [{ locale: 'en-PH', findMemberUrl: 'https://bni.ph/en-PH/findamember' }],
   },
   {
@@ -412,7 +412,7 @@ const SITE_SEEDS: SiteSeed[] = [
   {
     id: 'kh',
     countryCode: 'KH',
-    label: 'Kambodscha',
+    label: 'Cambodia',
     languages: [{ locale: 'en-US', findMemberUrl: 'https://bni-cambodia.com/en-US/findamember' }],
   },
 ];
