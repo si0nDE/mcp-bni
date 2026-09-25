@@ -58,6 +58,20 @@ export function defaultMatchMode(keywords: string | undefined): SearchMatchMode 
   return words.length > 1 ? 'phrase' : 'any';
 }
 
+/**
+ * Splits BNI's own "<Chapter> - <Region>" chapter-field text into its two parts. Used both to
+ * parse this text off a member row here, and (in index.ts's resolveChapterMembers) to strip the
+ * region back off when a caller passes this exact compound string — e.g. copied from bni_search's
+ * own "Chapter: X - Y" display — back in as a chapterName for a chapter-scoped tool, which expects
+ * the bare name.
+ */
+export function splitChapterAndRegion(text: string): { chapter: string; region: string } {
+  const dashIdx = text.indexOf(' - ');
+  return dashIdx > -1
+    ? { chapter: text.slice(0, dashIdx).trim(), region: text.slice(dashIdx + 3).trim() }
+    : { chapter: text.trim(), region: '' };
+}
+
 /** Swaps the last path segment of a site's "find a member" URL for "memberdetails" — verified live for bni.de and bnifrance.fr. */
 function buildDetailBaseUrl(findMemberUrl: string): URL {
   const url = new URL(findMemberUrl);
@@ -137,9 +151,7 @@ export async function searchMembers(
     seen.add(name);
 
     const chapterFull = $(cells[2]).text().trim();
-    const dashIdx = chapterFull.indexOf(' - ');
-    const chapter = dashIdx > -1 ? chapterFull.slice(0, dashIdx).trim() : chapterFull;
-    const region = dashIdx > -1 ? chapterFull.slice(dashIdx + 3).trim() : '';
+    const { chapter, region } = splitChapterAndRegion(chapterFull);
 
     const city = $(cells[3]).text().trim();
     const district = $(cells[4]).text().trim();

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { searchMembers, matchesKeywords, defaultMatchMode, BniMember } from '../../src/bni-client/search';
+import { searchMembers, matchesKeywords, defaultMatchMode, splitChapterAndRegion, BniMember } from '../../src/bni-client/search';
 import { BniSite, BniSiteConfig } from '../../src/registry/types';
 
 const FIXTURES_DIR = join(__dirname, '../fixtures/search');
@@ -80,6 +80,23 @@ describe('searchMembers', () => {
     const parameters = new URLSearchParams(new URLSearchParams(sentBody).get('parameters') ?? '');
     expect(parameters.get('chapterName')).toBe('501');
     expect(parameters.get('keywords')).toBe('');
+  });
+});
+
+describe('splitChapterAndRegion', () => {
+  it('splits the compound "Chapter - Region" text BNI itself renders', () => {
+    expect(splitChapterAndRegion('Juwel Würzburg - Würzburg-Erlangen')).toEqual({
+      chapter: 'Juwel Würzburg',
+      region: 'Würzburg-Erlangen',
+    });
+  });
+
+  it('returns the whole trimmed text as chapter, empty region, when there is no " - " separator', () => {
+    expect(splitChapterAndRegion('Juwel Würzburg')).toEqual({ chapter: 'Juwel Würzburg', region: '' });
+  });
+
+  it('does not split on a bare hyphen without surrounding spaces (part of a chapter\'s own name)', () => {
+    expect(splitChapterAndRegion('Bergisches-Land BNI')).toEqual({ chapter: 'Bergisches-Land BNI', region: '' });
   });
 });
 

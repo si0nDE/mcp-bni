@@ -6,7 +6,14 @@ import { BNI_SITES } from './registry/sites';
 import { matchProfession, getProfessions, getProfessionCategories } from './taxonomy';
 import { resolveSitesForCountry, resolveSiteById } from './registry/resolve';
 import { discoverSiteConfig } from './registry/discovery';
-import { searchMembers, BniMember, SearchMatchMode, matchesKeywords, defaultMatchMode } from './bni-client/search';
+import {
+  searchMembers,
+  BniMember,
+  SearchMatchMode,
+  matchesKeywords,
+  defaultMatchMode,
+  splitChapterAndRegion,
+} from './bni-client/search';
 import { getUpcomingEvents, getEventDetail, BniEvent } from './bni-client/events';
 import { getRegions, getEventTypeNames } from './bni-client/regions';
 import { listChapterOptions, matchChapterOption, BniChapterOption } from './bni-client/chapters';
@@ -105,8 +112,24 @@ interface ChapterResolution {
  */
 async function resolveChapterMembers(
   country: string,
-  chapterName: string
+  rawChapterName: string
 ): Promise<{ resolution: ChapterResolution } | { errorResponse: ReturnType<typeof noSiteError> }> {
+  // Live-verified critical bug fix: bni_search's own default display renders a member's chapter
+  // as "<Name> - <Region>" (the same format BNI's own site uses) — a natural, reasonable string
+  // for a caller to copy straight back in as chapterName. But every match below (the dropdown
+  // lookup and the chapter/region substring filter) expects the bare name. Passing the compound
+  // string through unstripped made the substring filter match ZERO members (nameNorm — the whole
+  // compound string — isn't contained in any single member's plain chapter or region field),
+  // which forced a fallback to the fully unfiltered keyword-search results. Verified live: for
+  // chapterName "Juwel Würzburg - Würzburg-Erlangen", this silently returned a mix from several
+  // unrelated chapters (incl. "Galaxis BNI (Ulm)"), and index.ts's "representative member" picked
+  // that wrong chapter's own meeting/location/count to present as this response's header — with
+  // only the same generic "used keyword search, may be approximate" note as the correctly-narrowed
+  // case (see isolationFailed below for why that wasn't a strong enough signal). Stripping the
+  // suffix here (bni_search's own separator convention — see search.ts) makes every caller of this
+  // function behave like the bare-name case regardless of which string form was passed in.
+  const chapterName = splitChapterAndRegion(rawChapterName).chapter;
+
   const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
   if (sites.length === 0) return { errorResponse: noSiteError(country) };
 
@@ -171,6 +194,13 @@ async function resolveChapterMembers(
   const chapterMembers = allResults.filter(
     ({ member }) => member.chapter.toLowerCase().includes(nameNorm) || member.region.toLowerCase().includes(nameNorm)
   );
+  // Live-verified: when narrowing finds nothing, the fallback below is allResults — every one of
+  // this chapter-name's raw, unfiltered keyword-search hits, potentially spanning several
+  // unrelated chapters, with no result actually confirmed to be the requested chapter at all. This
+  // is a materially higher-risk situation than "narrowing worked, but via a heuristic rather than
+  // an exact listing" (the case below), so it gets its own, much more explicit warning rather than
+  // being folded into the same generic note.
+  const isolationFailed = chapterMembers.length === 0 && allResults.length > 0;
   const useResults = chapterMembers.length > 0 ? chapterMembers : allResults;
   const ambiguityNote =
     ambiguousOn.length > 0
@@ -182,7 +212,9 @@ async function resolveChapterMembers(
     coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
     (exactChapterMatch
       ? ''
-      : '\n(No exact chapter listing found for this name — used keyword search instead, which may be incomplete or approximate. Try bni_list_chapters for the exact name.)') +
+      : isolationFailed
+        ? `\n(Could not isolate "${chapterName}" from the keyword search at all — no result's own chapter/region field matched it, so every member, and the chapter identity/meeting/count below, comes from an unverified, unfiltered keyword search that may belong to a different chapter entirely. Do not present this response's chapter details as confirmed; retry with the exact name from bni_list_chapters, or a more specific chapterName.)`
+        : '\n(No exact chapter listing found for this name — used keyword search instead, narrowed by matching chapter/region name; this is a heuristic, not a guarantee. Try bni_list_chapters for the exact name.)') +
     ambiguityNote;
 
   // Chapter meeting logistics, resolved via one representative member.
@@ -540,7 +572,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : shown
               .map(
                 ({ site, member }, i) =>
-                  `${i + 1}. **${member.name}** | ${member.company}\n   Profession: ${member.profession}\n   Chapter: ${member.chapter}${member.region ? ` - ${member.region}` : ''}\n   City: ${member.city}${member.district ? ` (${member.district})` : ''}\n   Site: ${site} | ID: ${member.encryptedMemberId}`
+                  // Chapter and region are kept on separate lines deliberately (not joined as
+                  // "Chapter - Region" on one line): a caller passing this display text straight
+                  // back into bni_chapter_gaps/bni_chapter_members's chapterName would otherwise
+                  // pass a compound string those tools don't expect — see resolveChapterMembers.
+                  `${i + 1}. **${member.name}** | ${member.company}\n   Profession: ${member.profession}\n   Chapter: ${member.chapter}${member.region ? `\n   Region: ${member.region}` : ''}\n   City: ${member.city}${member.district ? ` (${member.district})` : ''}\n   Site: ${site} | ID: ${member.encryptedMemberId}`
               )
               .join('\n\n');
 
