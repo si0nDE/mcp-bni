@@ -6,23 +6,29 @@ export interface BniRegion {
   name: string;
 }
 
+/** Official regions for one specific internal country id. Returns [] on a failed request rather than throwing — see getRegions, which merges this across every id in a (possibly multi-country) site's config. */
+export async function getRegionsForCountryId(site: BniSite, countryId: string): Promise<BniRegion[]> {
+  const params = new URLSearchParams();
+  params.set('countryId', countryId);
+  params.set('request_locale', 'en');
+  params.set('siteLocale', 'en');
+
+  const res = await rateLimitedFetch(`${site.baseUrl}/web/open/appsCmsRegionListByCountryIdJson?${params.toString()}`);
+  if (!res.ok) return [];
+
+  const items = (await res.json()) as Array<{ id: number; name: string }>;
+  return items.map((item) => ({ id: item.id, name: item.name }));
+}
+
 /** Official regions for a site — one request per internal country id, merged. */
 export async function getRegions(site: BniSite, config: BniSiteConfig): Promise<BniRegion[]> {
   const countryIds = config.countryIds.split(',').map((c) => c.trim());
   const regionsById = new Map<number, BniRegion>();
 
   for (const countryId of countryIds) {
-    const params = new URLSearchParams();
-    params.set('countryId', countryId);
-    params.set('request_locale', 'en');
-    params.set('siteLocale', 'en');
-
-    const res = await rateLimitedFetch(`${site.baseUrl}/web/open/appsCmsRegionListByCountryIdJson?${params.toString()}`);
-    if (!res.ok) continue;
-
-    const items = (await res.json()) as Array<{ id: number; name: string }>;
-    for (const item of items) {
-      regionsById.set(item.id, { id: item.id, name: item.name });
+    const regions = await getRegionsForCountryId(site, countryId);
+    for (const region of regions) {
+      regionsById.set(region.id, region);
     }
   }
 

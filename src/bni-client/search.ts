@@ -17,7 +17,15 @@ export interface BniMember {
 export interface SearchParams {
   keywords?: string;
   city?: string;
-  /** A chapter id from listChapterOptions — scopes the query to that chapter's exact, complete roster instead of a keyword match (and its ~250 result cap). Takes precedence over `keywords` when both are set. */
+  /**
+   * A chapter id from listChapterOptions, intended to scope the query to that chapter's exact,
+   * complete roster instead of a keyword match. Takes precedence over `keywords` when both are
+   * set (sets keywords to '' server-side) — but live-tested against bni.de and found not to
+   * reliably scope results to just that chapter (returned either zero results, or every member of
+   * that chapter's whole region unfiltered, depending on which other form fields were present).
+   * Root cause unconfirmed; kept for a future investigation, but resolveChapterMembers
+   * (index.ts) does not currently use this — it searches by the chapter's exact name instead.
+   */
   chapterId?: string;
   language?: BniSiteLanguage;
 }

@@ -105,10 +105,22 @@ interface ChapterResolution {
 }
 
 /**
- * Shared chapter-roster resolution for bni_chapter_gaps and bni_chapter_members: prefers each
- * site's own chapter dropdown (an exact match there gives the complete roster directly, no
- * keyword search or its ~250 cap involved) and only falls back to a narrowed keyword search when
- * a site doesn't expose one.
+ * Shared chapter-roster resolution for bni_chapter_gaps and bni_chapter_members. Always resolves
+ * members via a keywords search (never chapterId — see below), but prefers the confirmed exact
+ * chapter name from a live listing as the keyword when one is available, over the crude
+ * first-word searchToken fallback.
+ *
+ * Live-verified (bni.de, 2026-09-25): searchMembers's chapterId param (which sets the search
+ * form's own "chapterName" field to that id) does NOT actually scope results to that chapter —
+ * confirmed by direct request: passing a chapter's own id (from both listChapterOptions's dropdown
+ * and its region-fan-out, matching bni_member_detail's independently-derived chapterId exactly)
+ * returned either zero results, or every member of that chapter's whole region unfiltered (two
+ * different unrelated chapters mixed together), depending on which other form fields were present
+ * in the request. Root cause unconfirmed — possibly a different id namespace than this parameter
+ * expects — so this function does not use chapterId at all, regardless of source, until that's
+ * understood; a chapter matched via the dropdown/fan-out still only feeds its NAME into the
+ * keyword search below, same mechanism as the fallback case, just with a lower-collision-risk
+ * keyword.
  */
 async function resolveChapterMembers(
   country: string,
@@ -166,7 +178,7 @@ async function resolveChapterMembers(
       // "(City)" suffix the other doesn't). A tier that finds 2+ candidates (e.g. a city shared by
       // several chapters) is ambiguous, not resolved — recorded for the caller instead of silently
       // picking one, and the next tier (or the keyword fallback) is tried instead.
-      const chapterOptions = await listChapterOptions(site).catch(() => []);
+      const chapterOptions = await listChapterOptions(site, config).catch(() => []);
       let chapterOption: BniChapterOption | undefined;
       const byName = matchChapterOption(chapterOptions, chapterName);
       if (byName.match) {
@@ -178,11 +190,7 @@ async function resolveChapterMembers(
         if (byToken.match) chapterOption = byToken.match;
         else if (byToken.candidates.length > 0) ambiguousOn.push({ site: site.id, candidates: byToken.candidates });
       }
-      const members = await searchMembers(
-        site,
-        config,
-        chapterOption ? { chapterId: chapterOption.id } : { keywords: searchToken }
-      );
+      const members = await searchMembers(site, config, { keywords: chapterOption?.name ?? searchToken });
       if (chapterOption) exactChapterMatch = true;
       for (const member of members) allResults.push({ site, member });
     } catch (err) {
@@ -210,11 +218,11 @@ async function resolveChapterMembers(
       : '';
   const notes =
     coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
-    (exactChapterMatch
-      ? ''
-      : isolationFailed
-        ? `\n(Could not isolate "${chapterName}" from the keyword search at all — no result's own chapter/region field matched it, so every member, and the chapter identity/meeting/count below, comes from an unverified, unfiltered keyword search that may belong to a different chapter entirely. Do not present this response's chapter details as confirmed; retry with the exact name from bni_list_chapters, or a more specific chapterName.)`
-        : '\n(No exact chapter listing found for this name — used keyword search instead, narrowed by matching chapter/region name; this is a heuristic, not a guarantee. Try bni_list_chapters for the exact name.)') +
+    (isolationFailed
+      ? `\n(Could not isolate "${chapterName}" from the keyword search at all — no result's own chapter/region field matched it, so every member, and the chapter identity/meeting/count below, comes from an unverified, unfiltered keyword search that may belong to a different chapter entirely. Do not present this response's chapter details as confirmed; retry with the exact name from bni_list_chapters, or a more specific chapterName.)`
+      : exactChapterMatch
+        ? ''
+        : `\n(No exact chapter listing found for this name — searched using a derived keyword ("${searchToken}") rather than a confirmed exact name; results are narrowed by matching chapter/region name, which is a heuristic, not a guarantee. Try bni_list_chapters for the exact name.)`) +
     ambiguityNote;
 
   // Chapter meeting logistics, resolved via one representative member.
@@ -298,7 +306,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_chapter_gaps',
       description:
-        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories). Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its result cap. The taxonomy itself is German-only; a member\'s own free-text profession can be in a different language, which is the usual cause when it shows up as "unmatched" rather than being a data error — translate as needed for the person you\'re presenting results to.',
+        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories). Resolves the chapter\'s exact name via bni_list_chapters where possible and uses that as the search keyword (still subject to the ~250-result-per-site cap, but with a low-collision-risk exact name rather than a guessed word). The taxonomy itself is German-only; a member\'s own free-text profession can be in a different language, which is the usual cause when it shows up as "unmatched" rather than being a data error — translate as needed for the person you\'re presenting results to.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -311,7 +319,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_chapter_members',
       description:
-        'Lists every member of a chapter by name, with company/profession/city — a compact roster. Complements bni_chapter_gaps (which analyzes professions/whitespace but omits names) without needing a bni_search keyword workaround. Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its 250-result cap.',
+        'Lists every member of a chapter by name, with company/profession/city — a compact roster. Complements bni_chapter_gaps (which analyzes professions/whitespace but omits names) without needing a bni_search keyword workaround. Resolves the chapter\'s exact name via bni_list_chapters where possible and uses that as the search keyword (still subject to the ~250-result-per-site cap, but with a low-collision-risk exact name rather than a guessed word).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -359,7 +367,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_list_chapters',
       description:
-        'Lists the exact, complete chapter names for a country, where available. Chapters found this way can be searched exactly via bni_chapter_gaps without keyword guesswork or the 250-result cap; sites that don\'t expose this list are noted as such.',
+        'Lists the exact, complete chapter names for a country, where available. Chapters found this way are used by bni_chapter_gaps/bni_chapter_members as a precise search keyword instead of a guessed word (still subject to the ~250-result-per-site cap); sites that don\'t expose this list are noted as such. First call for a country whose site builds this list region-by-region (rather than serving it directly) can take significantly longer (dozens of seconds) as a result; cached in-process afterward.',
       inputSchema: { type: 'object', properties: { ...COUNTRY_PROP }, required: ['country'] },
     },
     {
@@ -671,7 +679,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const failedSites: string[] = [];
       for (const site of sites) {
         try {
-          const chapters = await listChapterOptions(site);
+          const config = await discoverSiteConfig(site);
+          const chapters = await listChapterOptions(site, config);
           if (chapters.length === 0) unsupportedSites.push(site.id);
           else chaptersBySite.push({ site: site.id, chapters });
         } catch (err) {
