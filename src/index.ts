@@ -6,7 +6,7 @@ import { BNI_SITES } from './registry/sites';
 import { matchProfession, getProfessions, getProfessionCategories } from './taxonomy';
 import { resolveSitesForCountry, resolveSiteById } from './registry/resolve';
 import { discoverSiteConfig } from './registry/discovery';
-import { searchMembers, BniMember } from './bni-client/search';
+import { searchMembers, BniMember, SearchMatchMode, matchesKeywords, defaultMatchMode } from './bni-client/search';
 import { getUpcomingEvents, getEventDetail, BniEvent } from './bni-client/events';
 import { getRegions, getEventTypeNames } from './bni-client/regions';
 import { listChapterOptions, findChapterOption, BniChapterOption } from './bni-client/chapters';
@@ -53,6 +53,44 @@ function swampNote(perSiteCounts: Map<string, number>): string {
   return `\n(Note: site(s) ${swamped.join(', ')} returned ${SWAMPED_RESULT_THRESHOLD}+ results for this keyword — BNI's search matches broadly across name/profession/company rather than requiring an exact/AND match, so a common or multi-word term can return a large, possibly unfocused result set. Try a more specific keyword or add "city" to narrow it down.)`;
 }
 
+const DEFAULT_MAX_RESULTS = 20;
+const MAX_RESULTS_CEILING = 250;
+
+function clampMaxResults(raw: number | undefined): number {
+  if (raw === undefined || !Number.isFinite(raw)) return DEFAULT_MAX_RESULTS;
+  return Math.min(Math.max(Math.trunc(raw), 1), MAX_RESULTS_CEILING);
+}
+
+const FIELD_KEYS = ['name', 'company', 'profession', 'chapter', 'region', 'city', 'district', 'site', 'encryptedMemberId'] as const;
+type FieldKey = (typeof FIELD_KEYS)[number];
+
+function fieldValue(entry: { site: string; member: BniMember }, field: FieldKey): string {
+  switch (field) {
+    case 'site':
+      return entry.site;
+    case 'name':
+      return entry.member.name;
+    case 'company':
+      return entry.member.company;
+    case 'profession':
+      return entry.member.profession;
+    case 'chapter':
+      return entry.member.chapter;
+    case 'region':
+      return entry.member.region;
+    case 'city':
+      return entry.member.city;
+    case 'district':
+      return entry.member.district;
+    case 'encryptedMemberId':
+      return entry.member.encryptedMemberId;
+  }
+}
+
+function formatCompactLine(entry: { site: string; member: BniMember }, index: number, fields: FieldKey[]): string {
+  return `${index + 1}. ${fields.map((f) => fieldValue(entry, f)).join(' | ')}`;
+}
+
 const server = new Server({ name: 'mcp-bni', version: PACKAGE_VERSION }, { capabilities: { tools: {} } });
 
 const COUNTRY_PROP = {
@@ -67,12 +105,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_search',
       description:
-        'Searches the public BNI member directory for a country. Fans out across every registered site for that country (capped; see bni_list_countries). Max 250 results per site — narrow with keywords/city for precise results.',
+        'Searches the public BNI member directory for a country. Fans out across every registered site for that country (capped; see bni_list_countries). BNI\'s own search matches each word in "keywords" independently (OR-style) up to 250 raw results per site; for a multi-word keywords this tool then narrows the raw matches down by matchMode before returning (default 20 results — raise maxResults for more).',
       inputSchema: {
         type: 'object',
         properties: {
           keywords: { type: 'string', description: 'Search term: name, profession, company, or specialty (e.g. "Marketing", "Tax advisor")' },
           city: { type: 'string', description: 'Filters by exact stored city — use keywords for anything less precise' },
+          matchMode: {
+            type: 'string',
+            enum: ['phrase', 'all', 'any'],
+            description:
+              'How a multi-word "keywords" is narrowed against BNI\'s raw (broad, OR-style) match: "phrase" (default) requires the exact phrase; "all" requires every word present in any order; "any" disables narrowing and returns BNI\'s raw unfiltered match. No effect on a single word.',
+          },
+          maxResults: {
+            type: 'number',
+            description: 'Caps how many matched members are returned (default 20, max 250). The full raw result set is still fetched and matched first; this only truncates the response.',
+          },
+          fields: {
+            type: 'array',
+            items: { type: 'string', enum: [...FIELD_KEYS] },
+            description:
+              'Restrict each result to just these fields, e.g. ["name","company","profession","city"], for a compact one-line-per-member response. Omit for the full default format.',
+          },
           ...COUNTRY_PROP,
         },
         required: ['country'],
@@ -287,7 +341,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === 'bni_search') {
-      const { keywords, city, country } = args as { keywords?: string; city?: string; country: string };
+      const {
+        keywords,
+        city,
+        country,
+        matchMode: matchModeArg,
+        maxResults: maxResultsArg,
+        fields: fieldsArg,
+      } = args as {
+        keywords?: string;
+        city?: string;
+        country: string;
+        matchMode?: SearchMatchMode;
+        maxResults?: number;
+        fields?: string[];
+      };
       const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
       if (sites.length === 0) return noSiteError(country);
 
@@ -308,19 +376,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) + swampNote(perSiteCounts);
 
-      if (results.length === 0) {
-        return { content: [{ type: 'text', text: `No members found.${notes}` }] };
+      // BNI's own "keywords" match is broad/OR-style server-side (see swampNote above) — narrow
+      // the already-fetched results client-side by default for a multi-word query, without ever
+      // asking the server for anything it didn't already return (so this can't hide a real match).
+      const effectiveMode: SearchMatchMode = matchModeArg ?? defaultMatchMode(keywords);
+      const narrowed = keywords ? results.filter((r) => matchesKeywords(r.member, keywords, effectiveMode)) : results;
+      const narrowedNote =
+        keywords && effectiveMode !== 'any' && narrowed.length !== results.length
+          ? `\n(${results.length} raw match(es) for this keyword narrowed to ${narrowed.length} using matchMode="${effectiveMode}"; pass matchMode:"any" for BNI's unfiltered broad match.)`
+          : '';
+
+      if (narrowed.length === 0) {
+        const hint =
+          results.length > 0
+            ? ` (${results.length} raw match(es) existed before matchMode="${effectiveMode}" narrowing — try matchMode:"any" to see them.)`
+            : '';
+        return { content: [{ type: 'text', text: `No members found.${hint}${notes}` }] };
       }
 
-      const text = results
-        .map(
-          ({ site, member }, i) =>
-            `${i + 1}. **${member.name}** | ${member.company}\n   Profession: ${member.profession}\n   Chapter: ${member.chapter}${member.region ? ` - ${member.region}` : ''}\n   City: ${member.city}${member.district ? ` (${member.district})` : ''}\n   Site: ${site} | ID: ${member.encryptedMemberId}`
-        )
-        .join('\n\n');
+      const limit = clampMaxResults(maxResultsArg);
+      const shown = narrowed.slice(0, limit);
+      const truncatedNote =
+        narrowed.length > limit ? `\n(Showing ${limit} of ${narrowed.length} — raise maxResults to see more.)` : '';
+
+      const validFields: FieldKey[] = Array.isArray(fieldsArg)
+        ? fieldsArg.filter((f): f is FieldKey => (FIELD_KEYS as readonly string[]).includes(f))
+        : [];
+
+      const text =
+        validFields.length > 0
+          ? shown.map((r, i) => formatCompactLine(r, i, validFields)).join('\n')
+          : shown
+              .map(
+                ({ site, member }, i) =>
+                  `${i + 1}. **${member.name}** | ${member.company}\n   Profession: ${member.profession}\n   Chapter: ${member.chapter}${member.region ? ` - ${member.region}` : ''}\n   City: ${member.city}${member.district ? ` (${member.district})` : ''}\n   Site: ${site} | ID: ${member.encryptedMemberId}`
+              )
+              .join('\n\n');
 
       return {
-        content: [{ type: 'text', text: `**${results.length} members found** (max 250 per site)${notes}\n\n${text}` }],
+        content: [
+          {
+            type: 'text',
+            text: `**${narrowed.length} member(s) matched** (max 250 raw per site)${narrowedNote}${notes}${truncatedNote}\n\n${text}`,
+          },
+        ],
       };
     }
 

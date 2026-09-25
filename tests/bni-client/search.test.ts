@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { searchMembers } from '../../src/bni-client/search';
+import { searchMembers, matchesKeywords, defaultMatchMode, BniMember } from '../../src/bni-client/search';
 import { BniSite, BniSiteConfig } from '../../src/registry/types';
 
 const FIXTURES_DIR = join(__dirname, '../fixtures/search');
@@ -80,5 +80,59 @@ describe('searchMembers', () => {
     const parameters = new URLSearchParams(new URLSearchParams(sentBody).get('parameters') ?? '');
     expect(parameters.get('chapterName')).toBe('501');
     expect(parameters.get('keywords')).toBe('');
+  });
+});
+
+describe('defaultMatchMode', () => {
+  it('returns "any" for empty/undefined keywords (no client-side narrowing needed)', () => {
+    expect(defaultMatchMode(undefined)).toBe('any');
+    expect(defaultMatchMode('')).toBe('any');
+    expect(defaultMatchMode('   ')).toBe('any');
+  });
+
+  it('returns "any" for a single word — matches current (working) behavior unchanged', () => {
+    expect(defaultMatchMode('Marketing')).toBe('any');
+  });
+
+  it('returns "phrase" for multi-word keywords — the demonstrated noisy-OR failure case', () => {
+    expect(defaultMatchMode('Simon Fieber')).toBe('phrase');
+  });
+});
+
+describe('matchesKeywords', () => {
+  const member: BniMember = {
+    name: 'Simon Fieber',
+    encryptedMemberId: 'id1',
+    chapter: 'Juwel Würzburg',
+    region: 'Würzburg-Erlangen',
+    city: 'Rimpar',
+    district: '',
+    profession: 'Cybersecurity Services',
+    company: 'mainsec UG (haftungsbeschränkt)',
+    profileUrl: 'https://example.test/profile',
+  };
+  const noise: BniMember = { ...member, name: 'Michael Simon', company: 'Sunny-Solartechnik GmbH', profession: 'Solar' };
+
+  it('"any" never filters, regardless of keywords', () => {
+    expect(matchesKeywords(noise, 'Simon Fieber', 'any')).toBe(true);
+  });
+
+  it('"phrase" requires the exact phrase somewhere in the member\'s fields', () => {
+    expect(matchesKeywords(member, 'Simon Fieber', 'phrase')).toBe(true);
+    expect(matchesKeywords(noise, 'Simon Fieber', 'phrase')).toBe(false);
+  });
+
+  it('"phrase" is case-insensitive', () => {
+    expect(matchesKeywords(member, 'SIMON fieber', 'phrase')).toBe(true);
+  });
+
+  it('"all" requires every word present, in any order or field', () => {
+    expect(matchesKeywords(member, 'Fieber Cybersecurity', 'all')).toBe(true); // name + profession
+    expect(matchesKeywords(noise, 'Fieber Cybersecurity', 'all')).toBe(false);
+  });
+
+  it('empty/whitespace-only keywords never filter, in any mode', () => {
+    expect(matchesKeywords(noise, '', 'phrase')).toBe(true);
+    expect(matchesKeywords(noise, '   ', 'all')).toBe(true);
   });
 });

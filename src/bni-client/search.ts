@@ -22,6 +22,42 @@ export interface SearchParams {
   language?: BniSiteLanguage;
 }
 
+export type SearchMatchMode = 'phrase' | 'all' | 'any';
+
+/**
+ * Client-side narrowing for callers of {@link searchMembers}. BNI's own member-search
+ * "keywords" field matches each whitespace-separated word independently (OR-style) against
+ * name/profession/company server-side — verified live (a two-word query like "Simon Fieber"
+ * returns every "Simon" and every "Fieber", not just people named both, and can be >99% noise).
+ * This only narrows an already-fetched result set down to what the caller likely meant; it
+ * never asks the server for anything it didn't already return, so it can't hide a real match.
+ */
+export function matchesKeywords(member: BniMember, keywords: string, mode: SearchMatchMode): boolean {
+  const trimmed = keywords.trim();
+  if (!trimmed || mode === 'any') return true;
+
+  const haystack = [member.name, member.company, member.profession, member.chapter, member.region, member.city, member.district]
+    .join(' ')
+    .toLowerCase();
+
+  if (mode === 'phrase') return haystack.includes(trimmed.toLowerCase());
+  return trimmed
+    .toLowerCase()
+    .split(/\s+/)
+    .every((word) => haystack.includes(word));
+}
+
+/**
+ * Single-word (or empty) keywords are left exactly as BNI already returned them — only a
+ * multi-word query gets phrase-narrowing applied by default, since that's the demonstrated
+ * failure case (see {@link matchesKeywords}). Callers can still opt into "all" or back out to
+ * "any" explicitly.
+ */
+export function defaultMatchMode(keywords: string | undefined): SearchMatchMode {
+  const words = keywords?.trim().split(/\s+/).filter(Boolean) ?? [];
+  return words.length > 1 ? 'phrase' : 'any';
+}
+
 /** Swaps the last path segment of a site's "find a member" URL for "memberdetails" — verified live for bni.de and bnifrance.fr. */
 function buildDetailBaseUrl(findMemberUrl: string): URL {
   const url = new URL(findMemberUrl);
