@@ -37,12 +37,29 @@ export async function listChapterOptions(site: BniSite, language?: BniSiteLangua
   return options;
 }
 
-/** Finds the option whose name matches `chapterName` exactly, else the first that contains it (both case-insensitive). */
-export function findChapterOption(options: BniChapterOption[], chapterName: string): BniChapterOption | undefined {
+export interface ChapterMatch {
+  /** The single confidently-resolved option, if any (an exact name match, or the one option containing the query). */
+  match?: BniChapterOption;
+  /** Populated only when ambiguous: 2+ options contain the query and none matched it exactly — the caller decides, rather than one being silently picked. */
+  candidates: BniChapterOption[];
+}
+
+/**
+ * Resolves `chapterName` against a site's chapter dropdown. An exact case-insensitive name match
+ * wins outright; otherwise every option whose name contains the query is a candidate. Exactly one
+ * candidate becomes `match` (this used to just be "the first substring match wins"); two or more
+ * are surfaced as `candidates` instead, since a generic query (e.g. a city shared by several
+ * chapters) could otherwise silently resolve to the wrong one with no signal anything was unsure.
+ */
+export function matchChapterOption(options: BniChapterOption[], chapterName: string): ChapterMatch {
   const norm = chapterName.trim().toLowerCase();
-  if (!norm) return undefined;
-  return (
-    options.find((o) => o.name.toLowerCase() === norm) ??
-    options.find((o) => o.name.toLowerCase().includes(norm))
-  );
+  if (!norm) return { candidates: [] };
+
+  const exact = options.find((o) => o.name.toLowerCase() === norm);
+  if (exact) return { match: exact, candidates: [] };
+
+  const substringMatches = options.filter((o) => o.name.toLowerCase().includes(norm));
+  if (substringMatches.length === 1) return { match: substringMatches[0], candidates: [] };
+  if (substringMatches.length > 1) return { candidates: substringMatches };
+  return { candidates: [] };
 }

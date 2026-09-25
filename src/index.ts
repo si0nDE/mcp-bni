@@ -9,7 +9,7 @@ import { discoverSiteConfig } from './registry/discovery';
 import { searchMembers, BniMember, SearchMatchMode, matchesKeywords, defaultMatchMode } from './bni-client/search';
 import { getUpcomingEvents, getEventDetail, BniEvent } from './bni-client/events';
 import { getRegions, getEventTypeNames } from './bni-client/regions';
-import { listChapterOptions, findChapterOption, BniChapterOption } from './bni-client/chapters';
+import { listChapterOptions, matchChapterOption, BniChapterOption } from './bni-client/chapters';
 import { getMemberDetail, extractEncodedParam } from './bni-client/member-detail';
 import { getChapterInfo, BniChapterInfo } from './bni-client/chapter-info';
 import { BniSite } from './registry/types';
@@ -131,6 +131,7 @@ async function resolveChapterMembers(
 
   const allResults: Array<{ site: BniSite; member: BniMember }> = [];
   const failedSites: string[] = [];
+  const ambiguousOn: Array<{ site: string; candidates: BniChapterOption[] }> = [];
   let exactChapterMatch = false;
   for (const site of sites) {
     try {
@@ -139,9 +140,21 @@ async function resolveChapterMembers(
       // chapter's complete roster directly, skipping the keyword heuristic (and its cap) below.
       // Tried against the caller's full chapterName first, then the same distinctive token used
       // for the keyword fallback (the two rarely render identically — e.g. one may carry a
-      // "(City)" suffix the other doesn't).
+      // "(City)" suffix the other doesn't). A tier that finds 2+ candidates (e.g. a city shared by
+      // several chapters) is ambiguous, not resolved — recorded for the caller instead of silently
+      // picking one, and the next tier (or the keyword fallback) is tried instead.
       const chapterOptions = await listChapterOptions(site).catch(() => []);
-      const chapterOption = findChapterOption(chapterOptions, chapterName) ?? findChapterOption(chapterOptions, searchToken);
+      let chapterOption: BniChapterOption | undefined;
+      const byName = matchChapterOption(chapterOptions, chapterName);
+      if (byName.match) {
+        chapterOption = byName.match;
+      } else if (byName.candidates.length > 0) {
+        ambiguousOn.push({ site: site.id, candidates: byName.candidates });
+      } else {
+        const byToken = matchChapterOption(chapterOptions, searchToken);
+        if (byToken.match) chapterOption = byToken.match;
+        else if (byToken.candidates.length > 0) ambiguousOn.push({ site: site.id, candidates: byToken.candidates });
+      }
       const members = await searchMembers(
         site,
         config,
@@ -159,11 +172,18 @@ async function resolveChapterMembers(
     ({ member }) => member.chapter.toLowerCase().includes(nameNorm) || member.region.toLowerCase().includes(nameNorm)
   );
   const useResults = chapterMembers.length > 0 ? chapterMembers : allResults;
+  const ambiguityNote =
+    ambiguousOn.length > 0
+      ? `\n(Ambiguous chapter name — matched multiple chapters on ${ambiguousOn
+          .map(({ site, candidates }) => `${site}: ${candidates.map((c) => `"${c.name}"`).join(', ')}`)
+          .join('; ')}. Used a keyword search instead of guessing one; the results below are still narrowed by chapter/region name, but pass the exact name from bni_list_chapters to resolve precisely.)`
+      : '';
   const notes =
     coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
     (exactChapterMatch
       ? ''
-      : '\n(No exact chapter listing found for this name — used keyword search instead, which may be incomplete or approximate. Try bni_list_chapters for the exact name.)');
+      : '\n(No exact chapter listing found for this name — used keyword search instead, which may be incomplete or approximate. Try bni_list_chapters for the exact name.)') +
+    ambiguityNote;
 
   // Chapter meeting logistics, resolved via one representative member.
   let chapterInfo: BniChapterInfo | null = null;

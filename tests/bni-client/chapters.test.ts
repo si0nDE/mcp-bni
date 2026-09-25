@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listChapterOptions, findChapterOption } from '../../src/bni-client/chapters';
+import { listChapterOptions, matchChapterOption } from '../../src/bni-client/chapters';
 import { BniSite } from '../../src/registry/types';
 
 const FIXTURES_DIR = join(__dirname, '../fixtures/chapters');
@@ -47,25 +47,43 @@ describe('listChapterOptions', () => {
   });
 });
 
-describe('findChapterOption', () => {
+describe('matchChapterOption', () => {
   const options = [
     { id: '501', name: 'Jet BNI (München)' },
     { id: '502', name: 'Example Chapter' },
   ];
 
   it('matches an exact name case-insensitively', () => {
-    expect(findChapterOption(options, 'example chapter')).toEqual({ id: '502', name: 'Example Chapter' });
+    expect(matchChapterOption(options, 'example chapter')).toEqual({ match: { id: '502', name: 'Example Chapter' }, candidates: [] });
   });
 
-  it('falls back to a substring match', () => {
-    expect(findChapterOption(options, 'Jet')).toEqual({ id: '501', name: 'Jet BNI (München)' });
+  it('falls back to a substring match when exactly one option contains the query', () => {
+    expect(matchChapterOption(options, 'Jet')).toEqual({ match: { id: '501', name: 'Jet BNI (München)' }, candidates: [] });
   });
 
-  it('returns undefined when nothing matches', () => {
-    expect(findChapterOption(options, 'Nonexistent Chapter')).toBeUndefined();
+  it('returns no match and no candidates when nothing matches', () => {
+    expect(matchChapterOption(options, 'Nonexistent Chapter')).toEqual({ candidates: [] });
   });
 
-  it('returns undefined for an empty query', () => {
-    expect(findChapterOption(options, '  ')).toBeUndefined();
+  it('returns no match and no candidates for an empty query', () => {
+    expect(matchChapterOption(options, '  ')).toEqual({ candidates: [] });
+  });
+
+  it('surfaces ambiguous candidates instead of picking the first substring match', () => {
+    const ambiguous = [
+      { id: '601', name: 'Juwel Würzburg' },
+      { id: '602', name: 'Scheurebe Würzburg' },
+    ];
+    const result = matchChapterOption(ambiguous, 'Würzburg');
+    expect(result.match).toBeUndefined();
+    expect(result.candidates).toEqual(ambiguous);
+  });
+
+  it('an exact match wins even when other options would also substring-match', () => {
+    const options = [
+      { id: '601', name: 'Würzburg' },
+      { id: '602', name: 'Juwel Würzburg' },
+    ];
+    expect(matchChapterOption(options, 'Würzburg')).toEqual({ match: { id: '601', name: 'Würzburg' }, candidates: [] });
   });
 });
