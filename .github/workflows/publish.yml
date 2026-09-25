@@ -1,0 +1,110 @@
+name: Publish to npm
+
+# Publishes on every push to main, but only if the version in package.json
+# is not yet on npm. Pushes without a version bump build and are skipped.
+#
+# Auth: npm Trusted Publishing (OIDC) — no NPM_TOKEN secret needed. This
+# requires a one-time setup on npmjs.com after the package's first publish
+# (which has to happen manually from a maintainer's machine, since npm
+# requires the package to already exist before a trusted publisher can be
+# configured for it): Package → Settings → Trusted Publisher → GitHub
+# Actions → repo "si0nDE/mcp-bni", workflow file "publish.yml", and enable
+# "npm publish" (not just "npm stage publish") so releases need no manual
+# 2FA approval step. See https://docs.npmjs.com/trusted-publishers/
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write # also used to create the matching GitHub release
+  id-token: write # required for OIDC trusted publishing + provenance
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history (not the default shallow clone) so the release step
+          # below can walk back to the previous tag for its commit list.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Trusted publishing needs npm CLI >= 11.5.1; the version bundled
+      # with setup-node's Node build isn't guaranteed to be that recent.
+      - name: Ensure npm CLI supports trusted publishing
+        run: npm install -g npm@latest && npm --version
+
+      - name: Build
+        run: npm run build
+
+      - name: Check if version is already published
+        id: check
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already on npm – skipping publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Publishing $NAME@$VERSION."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.check.outputs.publish == 'true'
+        run: npm publish --access public --provenance
+
+      # Gives the git tag a real description on GitHub (npm version's default
+      # tag message is just the bare version number). Skipped if a release
+      # for this tag already exists, e.g. on a re-run after a partial failure.
+      #
+      # Builds notes from the raw commit log instead of `gh release create
+      # --generate-notes`: that flag composes its list mainly from merged
+      # pull requests, and this repo ships via direct pushes to main with no
+      # PRs, so it was producing releases with nothing but a bare compare
+      # link (see v1.1.0/v1.2.0, fixed by hand once — this is the fix so it
+      # doesn't happen again).
+      - name: Create GitHub release
+        if: steps.check.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.check.outputs.version }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping."
+            exit 0
+          fi
+
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          {
+            if [ -n "$PREV_TAG" ]; then
+              echo "## Changes since $PREV_TAG"
+              echo
+              git log "$PREV_TAG"..HEAD --no-merges --pretty=format:'- %s'
+              echo
+              echo
+              echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$PREV_TAG...$TAG"
+            else
+              echo "## Changes"
+              echo
+              git log --no-merges --pretty=format:'- %s'
+            fi
+          } > release-notes.md
+
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file release-notes.md

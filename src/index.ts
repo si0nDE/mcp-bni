@@ -1,0 +1,670 @@
+#!/usr/bin/env node
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { BNI_SITES } from './registry/sites';
+import { matchProfession, getProfessions, getProfessionCategories } from './taxonomy';
+import { resolveSitesForCountry, resolveSiteById } from './registry/resolve';
+import { discoverSiteConfig } from './registry/discovery';
+import { searchMembers, BniMember } from './bni-client/search';
+import { getUpcomingEvents, getEventDetail, BniEvent } from './bni-client/events';
+import { getRegions, getEventTypeNames } from './bni-client/regions';
+import { getMemberDetail, extractEncodedParam } from './bni-client/member-detail';
+import { getChapterInfo, BniChapterInfo } from './bni-client/chapter-info';
+import { BniSite } from './registry/types';
+
+const { version: PACKAGE_VERSION } = require('../package.json') as { version: string };
+
+const FAN_OUT_CAP = 5;
+
+function formatEventDate(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return iso;
+  const [, year, month, day, hour, minute] = m;
+  return `${day}.${month}.${year}, ${hour}:${minute}`;
+}
+
+function noSiteError(country: string) {
+  return {
+    content: [{ type: 'text' as const, text: `No registered site for country code "${country}". See bni_list_countries.` }],
+    isError: true,
+  };
+}
+
+function coverageAndFailureNotes(sites: number, totalKnown: number, country: string, failedSites: string[]): string {
+  const coverage = totalKnown > sites ? `\n(Searched ${sites} of ${totalKnown} known sites for "${country}".)` : '';
+  const failures = failedSites.length > 0 ? `\n(Some sites failed: ${failedSites.join('; ')})` : '';
+  return coverage + failures;
+}
+
+// BNI's own member-search "keywords" field does broad, seemingly OR-based full-text matching
+// (confirmed live during Task 12 — see the bni_chapter_gaps handler below for the case where this
+// broke a result entirely). bni_search relays the caller's keywords verbatim, so a common or
+// multi-word term can silently return a large, effectively unfiltered result set that looks like a
+// normal successful search. Per the "fail clearly, never silently partial" design constraint, flag
+// this explicitly instead of staying silent about it — this does not change what's searched or
+// returned, only whether the caller is told a site's count is suspiciously high.
+const SWAMPED_RESULT_THRESHOLD = 200; // observed live per-site cap is ~250; this leaves margin.
+
+function swampNote(perSiteCounts: Map<string, number>): string {
+  const swamped = [...perSiteCounts.entries()].filter(([, count]) => count >= SWAMPED_RESULT_THRESHOLD).map(([id]) => id);
+  if (swamped.length === 0) return '';
+  return `\n(Note: site(s) ${swamped.join(', ')} returned ${SWAMPED_RESULT_THRESHOLD}+ results for this keyword — BNI's search matches broadly across name/profession/company rather than requiring an exact/AND match, so a common or multi-word term can return a large, possibly unfocused result set. Try a more specific keyword or add "city" to narrow it down.)`;
+}
+
+const server = new Server({ name: 'mcp-bni', version: PACKAGE_VERSION }, { capabilities: { tools: {} } });
+
+const COUNTRY_PROP = {
+  country: {
+    type: 'string',
+    description: 'Two-letter country code (e.g. "DE", "FR", "US"). See bni_list_countries for every registered code.',
+  },
+} as const;
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'bni_search',
+      description:
+        'Searches the public BNI member directory for a country. Fans out across every registered site for that country (capped; see bni_list_countries). Max 250 results per site — narrow with keywords/city for precise results.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          keywords: { type: 'string', description: 'Search term: name, profession, company, or specialty (e.g. "Marketing", "Tax advisor")' },
+          city: { type: 'string', description: 'Filters by exact stored city — use keywords for anything less precise' },
+          ...COUNTRY_PROP,
+        },
+        required: ['country'],
+      },
+    },
+    {
+      name: 'bni_member_detail',
+      description: 'Fetches a member\'s full public profile (phone, email, website, bio, title, chapter, chapter meeting info if resolvable).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          site: { type: 'string', description: 'The site id this member was found on (from bni_search results)' },
+          encryptedMemberId: { type: 'string', description: 'From bni_search results' },
+          name: { type: 'string', description: "Member's name (required to build the profile URL)" },
+        },
+        required: ['site', 'encryptedMemberId', 'name'],
+      },
+    },
+    {
+      name: 'bni_chapter_gaps',
+      description:
+        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chapterName: { type: 'string', description: 'Chapter name (as it appears in search results)' },
+          ...COUNTRY_PROP,
+        },
+        required: ['chapterName', 'country'],
+      },
+    },
+    {
+      name: 'bni_list_countries',
+      description: 'Lists every registered country code and the sites known for it.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'bni_upcoming_events',
+      description: 'Lists upcoming public BNI events for a country (trainings, webinars, regional visitor days). See bni_list_event_types for good search terms.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          daysAhead: { type: 'number', description: 'Days ahead from today (default 60)' },
+          search: { type: 'string', description: 'Filters title/description by keyword (e.g. "Visitor Day")' },
+          ...COUNTRY_PROP,
+        },
+        required: ['country'],
+      },
+    },
+    {
+      name: 'bni_event_detail',
+      description: 'Fetches an event\'s full details: contact, member/non-member cost, location or online link, registration count.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          site: { type: 'string', description: 'The site id this event was found on' },
+          eventId: { type: 'string', description: 'Event id or full eventdetails URL from bni_upcoming_events' },
+        },
+        required: ['site', 'eventId'],
+      },
+    },
+    {
+      name: 'bni_list_regions',
+      description: 'Lists the official BNI regions for a country.',
+      inputSchema: { type: 'object', properties: { ...COUNTRY_PROP }, required: ['country'] },
+    },
+    {
+      name: 'bni_list_event_types',
+      description: 'Lists the official BNI event-type names for a country — useful search terms for bni_upcoming_events.',
+      inputSchema: { type: 'object', properties: { ...COUNTRY_PROP }, required: ['country'] },
+    },
+    {
+      name: 'bni_list_professions',
+      description: 'Lists the official BNI worldwide profession catalog (professions + categories), searchable and filterable.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          search: { type: 'string', description: 'Filters professions by keyword (e.g. "advisor", "IT")' },
+          category: { type: 'string', description: 'Filters by category name (e.g. "Legal & Tax", "Computers & Technology")' },
+        },
+      },
+    },
+    {
+      name: 'bni_enrich_member',
+      description: 'Generates LinkedIn search URLs and suggested web searches to find more information about a BNI member (no external requests).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: "Member's full name" },
+          company: { type: 'string' },
+          city: { type: 'string' },
+          profession: { type: 'string' },
+        },
+        required: ['name'],
+      },
+    },
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  try {
+    if (name === 'bni_list_countries') {
+      const grouped = new Map<string, typeof BNI_SITES>();
+      for (const site of BNI_SITES) {
+        if (!grouped.has(site.countryCode)) grouped.set(site.countryCode, []);
+        grouped.get(site.countryCode)!.push(site);
+      }
+      const lines = [...grouped.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([code, sites]) => `- **${code}** — ${sites.map((s) => s.label).join(', ')}`);
+      return {
+        content: [
+          { type: 'text', text: `**${grouped.size} countries, ${BNI_SITES.length} registered sites**\n\n${lines.join('\n')}` },
+        ],
+      };
+    }
+
+    if (name === 'bni_list_professions') {
+      const { search, category } = args as { search?: string; category?: string };
+
+      let categories: Awaited<ReturnType<typeof getProfessionCategories>>;
+      let professions: Awaited<ReturnType<typeof getProfessions>>;
+      try {
+        [categories, professions] = await Promise.all([getProfessionCategories(), getProfessions()]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Profession catalog unavailable live: ${msg}` }], isError: true };
+      }
+
+      let filteredCategories = categories;
+      if (category) {
+        const catNorm = category.toLowerCase();
+        filteredCategories = categories.filter((c) => c.name.toLowerCase().includes(catNorm));
+        if (filteredCategories.length === 0) {
+          return {
+            content: [
+              { type: 'text', text: `No category matches "${category}". Available: ${categories.map((c) => c.name).join(', ')}` },
+            ],
+          };
+        }
+      }
+
+      const searchNorm = search?.toLowerCase();
+      const sections = filteredCategories
+        .map((cat) => {
+          const profs = professions.filter(
+            (p) => p.categoryId === cat.id && (!searchNorm || p.name.toLowerCase().includes(searchNorm))
+          );
+          if (profs.length === 0) return null;
+          return `**${cat.name}** (${profs.length})\n${profs.map((p) => `  - ${p.name}`).join('\n')}`;
+        })
+        .filter(Boolean);
+
+      if (sections.length === 0) {
+        return { content: [{ type: 'text', text: 'No professions found.' }] };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `**Official BNI profession catalog** (${professions.length} professions, ${categories.length} categories)\n\n${sections.join('\n\n')}`,
+          },
+        ],
+      };
+    }
+
+    if (name === 'bni_enrich_member') {
+      const { name: memberName, company, city, profession } = args as {
+        name: string;
+        company?: string;
+        city?: string;
+        profession?: string;
+      };
+
+      const linkedinUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(
+        memberName + (company ? ' ' + company : '')
+      )}`;
+      const queries = [
+        `"${memberName}"${company ? ` "${company}"` : ''} contact`,
+        `"${memberName}" ${city ?? ''} ${profession ?? ''} LinkedIn`.trim(),
+        company ? `${company} imprint email` : `"${memberName}" imprint`,
+      ];
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              `**Enrichment: ${memberName}**`,
+              company ? `Company: ${company}` : null,
+              city ? `City: ${city}` : null,
+              profession ? `Profession: ${profession}` : null,
+              `\nLinkedIn search: ${linkedinUrl}`,
+              `\nSuggested queries:`,
+              ...queries.map((q) => `  - ${q}`),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          },
+        ],
+      };
+    }
+
+    if (name === 'bni_search') {
+      const { keywords, city, country } = args as { keywords?: string; city?: string; country: string };
+      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+      if (sites.length === 0) return noSiteError(country);
+
+      const results: Array<{ site: string; member: BniMember }> = [];
+      const perSiteCounts = new Map<string, number>();
+      const failedSites: string[] = [];
+
+      for (const site of sites) {
+        try {
+          const config = await discoverSiteConfig(site);
+          const members = await searchMembers(site, config, { keywords, city });
+          perSiteCounts.set(site.id, members.length);
+          for (const member of members) results.push({ site: site.id, member });
+        } catch (err) {
+          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+
+      const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) + swampNote(perSiteCounts);
+
+      if (results.length === 0) {
+        return { content: [{ type: 'text', text: `No members found.${notes}` }] };
+      }
+
+      const text = results
+        .map(
+          ({ site, member }, i) =>
+            `${i + 1}. **${member.name}** | ${member.company}\n   Profession: ${member.profession}\n   Chapter: ${member.chapter}${member.region ? ` - ${member.region}` : ''}\n   City: ${member.city}${member.district ? ` (${member.district})` : ''}\n   Site: ${site} | ID: ${member.encryptedMemberId}`
+        )
+        .join('\n\n');
+
+      return {
+        content: [{ type: 'text', text: `**${results.length} members found** (max 250 per site)${notes}\n\n${text}` }],
+      };
+    }
+
+    if (name === 'bni_upcoming_events') {
+      const { daysAhead, search, country } = args as { daysAhead?: number; search?: string; country: string };
+      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+      if (sites.length === 0) return noSiteError(country);
+
+      const results: Array<{ site: string; event: BniEvent }> = [];
+      const failedSites: string[] = [];
+
+      for (const site of sites) {
+        try {
+          const config = await discoverSiteConfig(site);
+          const events = await getUpcomingEvents(site, config, daysAhead && daysAhead > 0 ? daysAhead : 60);
+          for (const event of events) results.push({ site: site.id, event });
+        } catch (err) {
+          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+
+      const searchNorm = search?.toLowerCase();
+      const filtered = searchNorm
+        ? results.filter(
+            ({ event }) =>
+              event.title.toLowerCase().includes(searchNorm) || (event.description ?? '').toLowerCase().includes(searchNorm)
+          )
+        : results;
+
+      const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites);
+
+      if (filtered.length === 0) {
+        return { content: [{ type: 'text', text: `No events found in the selected period.${notes}` }] };
+      }
+
+      const text = filtered
+        .map(({ site, event }) => {
+          const desc = event.description && event.description !== event.title ? `\n   ${event.description}` : '';
+          // event.id is an internal numeric id, NOT what bni_event_detail needs — extract the
+          // encoded eventId string from event.url (see design research: these are different values).
+          const encodedEventId = extractEncodedParam(event.url, 'eventId') ?? String(event.id);
+          return `- **${event.title}** — ${formatEventDate(event.start)} (site: ${site})${desc}\n   eventId: ${encodedEventId}`;
+        })
+        .join('\n\n');
+
+      return { content: [{ type: 'text', text: `**${filtered.length} events**${notes}\n\n${text}` }] };
+    }
+
+    if (name === 'bni_list_regions') {
+      const { country } = args as { country: string };
+      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+      if (sites.length === 0) return noSiteError(country);
+
+      const regionsById = new Map<number, string>();
+      const failedSites: string[] = [];
+      for (const site of sites) {
+        try {
+          const config = await discoverSiteConfig(site);
+          const regions = await getRegions(site, config);
+          for (const r of regions) regionsById.set(r.id, r.name);
+        } catch (err) {
+          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+
+      const regions = [...regionsById.values()].sort((a, b) => a.localeCompare(b));
+      const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites);
+
+      if (regions.length === 0) {
+        return { content: [{ type: 'text', text: `No regions found.${notes}` }] };
+      }
+      return { content: [{ type: 'text', text: `**${regions.length} regions**${notes}\n\n${regions.map((r) => `  - ${r}`).join('\n')}` }] };
+    }
+
+    if (name === 'bni_list_event_types') {
+      const { country } = args as { country: string };
+      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+      if (sites.length === 0) return noSiteError(country);
+
+      const names = new Set<string>();
+      const failedSites: string[] = [];
+      for (const site of sites) {
+        try {
+          const config = await discoverSiteConfig(site);
+          const siteNames = await getEventTypeNames(site, config);
+          siteNames.forEach((n) => names.add(n));
+        } catch (err) {
+          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+
+      const sorted = [...names].sort((a, b) => a.localeCompare(b));
+      const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites);
+
+      if (sorted.length === 0) {
+        return { content: [{ type: 'text', text: `No event types found.${notes}` }] };
+      }
+      return { content: [{ type: 'text', text: `**${sorted.length} event types**${notes}\n\n${sorted.map((n) => `  - ${n}`).join('\n')}` }] };
+    }
+
+    if (name === 'bni_member_detail') {
+      const { site: siteId, encryptedMemberId, name: memberName } = args as {
+        site: string;
+        encryptedMemberId: string;
+        name: string;
+      };
+      const site = resolveSiteById(siteId);
+      if (!site) {
+        return { content: [{ type: 'text', text: `Unknown site "${siteId}". See bni_list_countries.` }], isError: true };
+      }
+
+      let config;
+      try {
+        config = await discoverSiteConfig(site);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Could not resolve site config: ${msg}` }], isError: true };
+      }
+
+      const detail = await getMemberDetail(site, config, encryptedMemberId, memberName);
+      if (!detail) {
+        return { content: [{ type: 'text', text: 'Profile not found.' }] };
+      }
+
+      const chapterInfo = detail.chapterId ? await getChapterInfo(site, detail.chapterId).catch(() => null) : null;
+
+      const lines = [
+        `**${detail.title ? detail.title + ' ' : ''}${detail.name}**`,
+        detail.company ? `Company: ${detail.company}` : null,
+        detail.profession ? `Profession: ${detail.profession}` : null,
+        detail.chapter ? `Chapter: ${detail.chapter}` : null,
+        detail.phone ? `Phone: ${detail.phone}` : null,
+        detail.email ? `Email: ${detail.email}` : null,
+        detail.website ? `Website: ${detail.website}` : null,
+        detail.leaderFunctions?.length ? `Volunteer role: ${detail.leaderFunctions.join(', ')}` : null,
+        chapterInfo
+          ? [
+              `\n**Chapter meeting** (${chapterInfo.name}):`,
+              chapterInfo.meetingDay || chapterInfo.meetingTime
+                ? `  ${[chapterInfo.meetingDay, chapterInfo.meetingTime].filter(Boolean).join(', ')}${chapterInfo.meetingType ? ` (${chapterInfo.meetingType})` : ''}`
+                : null,
+              chapterInfo.locationName || chapterInfo.address
+                ? `  Location: ${[chapterInfo.locationName, chapterInfo.address, chapterInfo.postalCode, chapterInfo.city].filter(Boolean).join(', ')}`
+                : null,
+              chapterInfo.totalMemberCount ? `  Chapter members: ${chapterInfo.totalMemberCount}` : null,
+              chapterInfo.visitChapterUrl ? `  Visit as a guest: ${chapterInfo.visitChapterUrl}` : null,
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : null,
+        detail.bio ? `\nBio: ${detail.bio}` : null,
+        `\nProfile: ${detail.profileUrl}`,
+      ].filter(Boolean);
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+
+    if (name === 'bni_chapter_gaps') {
+      const { chapterName, country } = args as { chapterName: string; country: string };
+      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+      if (sites.length === 0) return noSiteError(country);
+
+      // Live-verified bug fix: BNI's own member-search "keywords" field does a broad, seemingly
+      // OR-based full-text match rather than an exact/AND filter, and is easily swamped. Chapter
+      // names (as rendered in bni_search's own "Chapter:" field, which is what a caller naturally
+      // passes here) almost always contain the near-universal word "BNI" plus a "(City)" suffix.
+      // Passing that full string verbatim as `keywords` was verified live against bni.de to return a
+      // near-max-cap, effectively unfiltered listing that can silently omit the target chapter's own
+      // members entirely (e.g. "Jet BNI (München)" as keywords returned 249 members, none of them
+      // actually in that chapter), which the exact-match filter below then has nothing to recover —
+      // producing a wrong-chapter report with no error. Stripping the noise words down to the
+      // chapter's own distinctive name (e.g. "Jet") keeps the candidate pool small enough that the
+      // exact filter below can actually find the right chapter (verified live: "Jet" alone returns 67
+      // members that DO include "Jet BNI (München)").
+      const searchToken =
+        chapterName
+          .replace(/\bBNI\b/gi, '')
+          .replace(/\([^)]*\)/g, '')
+          .trim()
+          .split(/\s+/)[0] || chapterName;
+
+      const allResults: Array<{ site: BniSite; member: BniMember }> = [];
+      const failedSites: string[] = [];
+      for (const site of sites) {
+        try {
+          const config = await discoverSiteConfig(site);
+          const members = await searchMembers(site, config, { keywords: searchToken });
+          for (const member of members) allResults.push({ site, member });
+        } catch (err) {
+          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+
+      const nameNorm = chapterName.toLowerCase();
+      const chapterMembers = allResults.filter(
+        ({ member }) => member.chapter.toLowerCase().includes(nameNorm) || member.region.toLowerCase().includes(nameNorm)
+      );
+      const useResults = chapterMembers.length > 0 ? chapterMembers : allResults;
+      const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites);
+
+      if (useResults.length === 0) {
+        return { content: [{ type: 'text', text: `No members found for chapter "${chapterName}".${notes}` }] };
+      }
+
+      // Chapter meeting logistics, resolved via one representative member.
+      let chapterInfo: BniChapterInfo | null = null;
+      const representative = useResults[0];
+      try {
+        const repConfig = await discoverSiteConfig(representative.site);
+        const repDetail = await getMemberDetail(
+          representative.site,
+          repConfig,
+          representative.member.encryptedMemberId,
+          representative.member.name
+        );
+        if (repDetail?.chapterId) {
+          chapterInfo = await getChapterInfo(representative.site, repDetail.chapterId);
+        }
+      } catch {
+        chapterInfo = null;
+      }
+
+      let categories: Awaited<ReturnType<typeof getProfessionCategories>> = [];
+      let professions: Awaited<ReturnType<typeof getProfessions>> = [];
+      let taxonomyAvailable = true;
+      try {
+        [categories, professions] = await Promise.all([getProfessionCategories(), getProfessions()]);
+      } catch {
+        taxonomyAvailable = false;
+      }
+
+      const professionCounts = new Map<string, number>();
+      const categoryMemberCounts = new Map<number, number>();
+      const categoryProfessionsPresent = new Map<number, Set<number>>();
+      const unmatched = new Set<string>();
+
+      for (const { member } of useResults) {
+        if (!member.profession) continue;
+        professionCounts.set(member.profession, (professionCounts.get(member.profession) ?? 0) + 1);
+
+        const matched = taxonomyAvailable ? await matchProfession(member.profession) : undefined;
+        if (matched) {
+          categoryMemberCounts.set(matched.categoryId, (categoryMemberCounts.get(matched.categoryId) ?? 0) + 1);
+          if (!categoryProfessionsPresent.has(matched.categoryId)) categoryProfessionsPresent.set(matched.categoryId, new Set());
+          categoryProfessionsPresent.get(matched.categoryId)!.add(matched.id);
+        } else if (taxonomyAvailable) {
+          unmatched.add(member.profession);
+        }
+      }
+
+      const sorted = [...professionCounts.entries()].sort((a, b) => b[1] - a[1]);
+      const profList = sorted.map(([p, c]) => `  - ${p} (${c}x)`).join('\n');
+
+      const emptyCategories = categories.filter((cat) => !categoryMemberCounts.has(cat.id));
+      const thinCategories = [...categoryMemberCounts.entries()].filter(([, count]) => count <= 2).sort((a, b) => a[1] - b[1]);
+      const thinCategoryList = thinCategories
+        .map(([catId, count]) => {
+          const cat = categories.find((c) => c.id === catId);
+          const present = categoryProfessionsPresent.get(catId) ?? new Set();
+          const suggestions = professions
+            .filter((p) => p.categoryId === catId && !present.has(p.id))
+            .slice(0, 5)
+            .map((p) => p.name);
+          return `  - **${cat?.name ?? catId}** (${count}x covered) — e.g. still open: ${suggestions.join(', ') || '(catalog for this category already exhausted)'}`;
+        })
+        .join('\n');
+
+      const chapterHeader = chapterInfo
+        ? [
+            `Meeting: ${[chapterInfo.meetingDay, chapterInfo.meetingTime].filter(Boolean).join(', ')}${chapterInfo.meetingType ? ` (${chapterInfo.meetingType})` : ''}`,
+            chapterInfo.locationName || chapterInfo.address
+              ? `Location: ${[chapterInfo.locationName, chapterInfo.address, chapterInfo.postalCode, chapterInfo.city].filter(Boolean).join(', ')}`
+              : null,
+            chapterInfo.totalMemberCount ? `Officially reported member count: ${chapterInfo.totalMemberCount}` : null,
+            chapterInfo.visitChapterUrl ? `Visit as a guest: ${chapterInfo.visitChapterUrl}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : null;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              `**Chapter: ${chapterInfo?.name ?? chapterName}** — ${useResults.length} members found${notes}`,
+              chapterHeader,
+              `\n**Existing professions:**\n${profList || '  (no data)'}`,
+              !taxonomyAvailable
+                ? `\n**Whitespace analysis currently unavailable** (official profession taxonomy not reachable live — the raw profession list above is still complete).`
+                : [
+                    `\n**Fully unoccupied categories (full whitespace potential):**\n${emptyCategories.map((c) => `  - ${c.name}`).join('\n') || '  (none — every category represented)'}`,
+                    `\n**Categories with low coverage (1-2 members) — specific open professions:**\n${thinCategoryList || '  (no thinly-covered categories)'}`,
+                    unmatched.size > 0
+                      ? `\n**Unmatched free-text professions** (not in the official catalog — possibly a typo or niche profession):\n${[...unmatched].map((p) => `  - ${p}`).join('\n')}`
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join('\n'),
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          },
+        ],
+      };
+    }
+
+    if (name === 'bni_event_detail') {
+      const { site: siteId, eventId } = args as { site: string; eventId: string };
+      const site = resolveSiteById(siteId);
+      if (!site) {
+        return { content: [{ type: 'text', text: `Unknown site "${siteId}". See bni_list_countries.` }], isError: true };
+      }
+
+      let config;
+      try {
+        config = await discoverSiteConfig(site);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Could not resolve site config: ${msg}` }], isError: true };
+      }
+
+      const encodedEventId = extractEncodedParam(eventId, 'eventId') ?? eventId;
+      const detail = await getEventDetail(site, config, encodedEventId);
+      if (!detail) {
+        return { content: [{ type: 'text', text: 'Event not found.' }] };
+      }
+
+      const lines = [
+        `**${detail.title}**`,
+        detail.contactName ? `Contact: ${detail.contactName}${detail.contactPhone ? `, tel. ${detail.contactPhone}` : ''}` : null,
+        detail.costMembers || detail.costNonMembers
+          ? `Cost: members ${detail.costMembers ?? '?'} / non-members ${detail.costNonMembers ?? '?'}`
+          : null,
+        detail.location ? `Location: ${detail.location}` : null,
+        detail.registrationCount !== undefined ? `Registrations so far: ${detail.registrationCount}` : null,
+        detail.description ? `\n${detail.description}` : null,
+      ].filter(Boolean);
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    }
+
+    return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true };
+  }
+});
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch(console.error);

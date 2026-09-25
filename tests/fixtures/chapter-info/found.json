@@ -1,0 +1,26 @@
+{
+  "content": {
+    "orgId": 5836,
+    "orgType": "CHAPTER",
+    "chapterDetails": {
+      "id": 5836,
+      "name": "Augustus BNI (Augsburg)",
+      "phoneNumber": "",
+      "meetingDay": "Donnerstag",
+      "meetingTime": "6:40",
+      "locationName": "N8 NachtStallung Restaurant",
+      "addressLine1": "Johannes-Haag-Straße 36",
+      "addressLine2": "",
+      "city": "Augsburg",
+      "postalCode": "86153",
+      "regionName": "Augsburg",
+      "totalMemberCount": 37,
+      "chapterUrl": "http://bni-augsburg.de/de/chapterdetail?chapterId=j%2BoFYPTGcqZ9rNnmp6W5%2FQ%3D%3D",
+      "visitChapterUrl": "http://bni-augsburg.de/de/visitorregistration?chapterId=5836",
+      "onlineMeetingLink": "",
+      "meetingType": "IN_PERSON",
+      "meetingTypeText": "Präsenztreffen",
+      "meetingDuration": 110
+    }
+  }
+}

@@ -1,0 +1,4 @@
+[
+  { "id": 1, "title": "Event A", "description": "Event A", "start": "2026-10-05T10:00", "end": "2026-10-05T11:00", "url": "eventdetails?eventId=aaa" },
+  { "id": 2, "title": "Event B", "description": "Event B", "start": "2026-10-01T10:00", "end": "2026-10-01T11:00", "url": "eventdetails?eventId=bbb" }
+]

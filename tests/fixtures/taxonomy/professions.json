@@ -1,0 +1,12 @@
+{
+  "professions": [
+    { "id": 690030, "name": "Steuerberatung", "categoryId": 69 },
+    { "id": 621020, "name": "IT-Beratung", "categoryId": 62 },
+    { "id": 430130, "name": "Malerei und Lackiererei", "categoryId": 43 }
+  ],
+  "professionCategories": [
+    { "id": 69, "name": "Recht & Steuer" },
+    { "id": 62, "name": "Computer & Programmierung" },
+    { "id": 43, "name": "Handwerk" }
+  ]
+}

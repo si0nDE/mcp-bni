@@ -1,0 +1,150 @@
+{
+  "planPath": "docs/superpowers/plans/2026-09-25-bni-global-rewrite.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Scaffold project + rate limiter",
+      "status": "completed",
+      "description": "**Goal:** Fresh, buildable, testable TypeScript project skeleton with a shared, host-aware rate limiter that every later HTTP-calling module will use.\n\n**Files:**\n- Create: `package.json`\n- Create: `tsconfig.json`\n- Create: `.gitignore`\n- Create: `LICENSE`\n- Create: `src/rate-limit.ts`\n- Test: `tests/rate-limit.test.ts`\n\n**Acceptance Criteria:**\n- [ ] `npm install && npm run build` succeeds with zero TypeScript errors\n- [ ] `npm test` runs and passes\n- [ ] Two calls to `waitForRateLimit` for the same host, back to back, are measurably spaced by at least `minDelayMs`\n- [ ] Two calls for two different hosts are not delayed relative to each other\n\n**Verify:** `npm run build && npm test` \u2192 build succeeds, all tests green\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 1 for full step-by-step content (package.json/tsconfig.json/LICENSE contents, rate-limit.ts implementation, test code).\n\n```json:metadata\n{\"files\": [\"package.json\", \"tsconfig.json\", \".gitignore\", \"LICENSE\", \"src/rate-limit.ts\", \"tests/rate-limit.test.ts\"], \"verifyCommand\": \"npm run build && npm test\", \"acceptanceCriteria\": [\"npm run build succeeds with zero errors\", \"npm test passes\", \"same-host calls are spaced by minDelayMs\", \"different-host calls are not delayed\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": []
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Site registry types + seed data",
+      "status": "completed",
+      "description": "**Goal:** The `BniSite`/`BniSiteConfig` types and the curated list of known BNI sites, ready for the discovery module (Task 3) to resolve.\n\n**Context:** A combined-country site (Germany+Austria share one member database) is represented as two `BniSite` entries pointing at the identical `findMemberUrl` \u2014 discovery is keyed by URL (Task 3), so this costs one real fetch, reused for both.\n\n**Files:**\n- Create: `src/registry/types.ts`\n- Create: `src/registry/sites.ts`\n\n**Acceptance Criteria:**\n- [ ] `BNI_SITES` contains one entry per confirmed URL in the research doc (skipping rows with no URL and the regional-only countries: USA, Brazil, Spain, Indonesia)\n- [ ] Germany/Austria is represented as two entries (`countryCode: \"DE\"` and `countryCode: \"AT\"`) sharing one `findMemberUrl`\n- [ ] Switzerland is one entry with three `languages` (`de-CH`, `fr-CH`, `it-CH`)\n- [ ] `baseUrl` on every entry is derived (not hand-typed) from `languages[0].findMemberUrl`\n- [ ] `npm run build` succeeds\n\n**Verify:** `npm run build && node -e \"const {BNI_SITES}=require('./dist/registry/sites'); console.log(BNI_SITES.length)\"` \u2192 prints a count \u2265 40\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 2 for full code (types.ts, sites.ts seed entries + transcription instructions referencing docs/superpowers/specs/2026-09-25-bni-country-sites-research.md).\n\n```json:metadata\n{\"files\": [\"src/registry/types.ts\", \"src/registry/sites.ts\"], \"verifyCommand\": \"npm run build && node -e \\\"const {BNI_SITES}=require('./dist/registry/sites'); console.log(BNI_SITES.length)\\\"\", \"acceptanceCriteria\": [\"one BniSite entry per confirmed research-doc URL\", \"DE and AT share one findMemberUrl as two entries\", \"CH is one entry with 3 languages\", \"baseUrl is derived, not hand-typed\", \"build succeeds\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Live site-config discovery + cache",
+      "status": "completed",
+      "description": "**Goal:** Given a `BniSite`, fetch its `findMemberUrl` once and extract `websiteId`/`countryIds` from the two hidden `<input>` fields, caching by URL for 24h; fail with a specific, actionable error if either input is missing.\n\n**Files:**\n- Create: `src/registry/discovery.ts`\n- Create: `tests/fixtures/discovery/success.html`\n- Create: `tests/fixtures/discovery/missing-inputs.html`\n- Test: `tests/registry/discovery.test.ts`\n\n**Acceptance Criteria:**\n- [ ] `discoverSiteConfig` returns `{ websiteId, countryIds }` parsed from a fixture with both hidden inputs present\n- [ ] A second call for the same site does not trigger a second fetch (cache hit)\n- [ ] A fixture missing the inputs causes a rejected promise with a `SiteDiscoveryError` naming the site and which field was missing\n- [ ] Discovery cache is keyed by URL, not by site id\n\n**Verify:** `npx vitest run tests/registry/discovery.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 3 for full code (fixtures, test, discovery.ts implementation).\n\n```json:metadata\n{\"files\": [\"src/registry/discovery.ts\", \"tests/fixtures/discovery/success.html\", \"tests/fixtures/discovery/missing-inputs.html\", \"tests/registry/discovery.test.ts\"], \"verifyCommand\": \"npx vitest run tests/registry/discovery.test.ts\", \"acceptanceCriteria\": [\"parses websiteId/countryIds from hidden inputs\", \"second call for same URL does not re-fetch\", \"missing inputs throws SiteDiscoveryError naming the field\", \"cache keyed by URL not site id\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Profession taxonomy module (English, fixture-tested)",
+      "status": "completed",
+      "description": "**Goal:** Port the existing live-fetched, cached BNI profession taxonomy (English comments, native fetch, routed through the rate limiter) with fixture-based tests.\n\n**Context:** This logic is not derived from the old si0nDE/alexaltovate fork \u2014 written fresh this session against bnimanager.de's public API. Porting it is not a derivative-work concern.\n\n**Files:**\n- Create: `src/taxonomy.ts`\n- Create: `tests/fixtures/taxonomy/professions.json`\n- Create: `tests/fixtures/taxonomy/titles.json`\n- Create: `tests/fixtures/taxonomy/functions.json`\n- Test: `tests/taxonomy.test.ts`\n\n**Acceptance Criteria:**\n- [ ] getProfessions/getProfessionCategories/getCategory return fixture data\n- [ ] matchProfession matches an exact name and falls back to substring matching\n- [ ] matchProfession returns undefined (not a thrown error) when the source is unreachable\n- [ ] stripAcademicTitle separates a known title from a name\n- [ ] detectLeaderFunctions finds a mentioned function in free text\n- [ ] All three source calls go through the shared rate limiter\n\n**Verify:** `npx vitest run tests/taxonomy.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 4 for full code.\n\n```json:metadata\n{\"files\": [\"src/taxonomy.ts\", \"tests/fixtures/taxonomy/professions.json\", \"tests/fixtures/taxonomy/titles.json\", \"tests/fixtures/taxonomy/functions.json\", \"tests/taxonomy.test.ts\"], \"verifyCommand\": \"npx vitest run tests/taxonomy.test.ts\", \"acceptanceCriteria\": [\"getProfessions/getProfessionCategories/getCategory return fixture data\", \"matchProfession matches exact and substring\", \"matchProfession returns undefined (not throw) when source unreachable\", \"stripAcademicTitle separates a known title\", \"detectLeaderFunctions finds a mentioned function\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Member search client",
+      "status": "completed",
+      "description": "**Goal:** Query a resolved site's public member-search endpoint and parse results using the real 7-column row structure confirmed live this session.\n\n**Files:**\n- Create: `src/bni-client/search.ts`\n- Create: `tests/fixtures/search/results.html`\n- Test: `tests/bni-client/search.test.ts`\n\n**Acceptance Criteria:**\n- [ ] Parses both members from the fixture with correct name, decoded encryptedMemberId, chapter, region, city, district, leaf profession name, company\n- [ ] Duplicate name rows are deduplicated\n- [ ] profileUrl built from findMemberUrl with memberdetails swapped in, plus query params\n- [ ] Non-OK HTTP response throws a specific error naming the site\n- [ ] Request goes through rateLimitedFetch\n\n**Verify:** `npx vitest run tests/bni-client/search.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 5 for full code.\n\n```json:metadata\n{\"files\": [\"src/bni-client/search.ts\", \"tests/fixtures/search/results.html\", \"tests/bni-client/search.test.ts\"], \"verifyCommand\": \"npx vitest run tests/bni-client/search.test.ts\", \"acceptanceCriteria\": [\"parses both fixture members with correct fields\", \"duplicate name rows deduplicated\", \"profileUrl derived from findMemberUrl with memberdetails swapped in\", \"non-OK response throws error naming the site\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Member detail client",
+      "status": "completed",
+      "description": "**Goal:** Fetch and parse a single member's full profile (phone, email, website, bio, chapter name + chapterId, academic title, leader functions), reusing the taxonomy module.\n\n**Context:** chapterId is extracted but this module does NOT call chapter-info itself \u2014 composing member + chapter info is index.ts's job (Task 9... now Task 12).\n\n**Files:**\n- Create: `src/bni-client/member-detail.ts`\n- Create: `tests/fixtures/member-detail/profile.html`\n- Test: `tests/bni-client/member-detail.test.ts`\n\n**Acceptance Criteria:**\n- [ ] Parses name, title, profession, company, phone, email, website (social/own-domain excluded), chapter name + chapterId (decoded), bio, leader functions\n- [ ] Non-OK response returns null\n- [ ] Empty response body returns null\n- [ ] profileUrl matches memberdetails-derived URL with right query params\n\n**Verify:** `npx vitest run tests/bni-client/member-detail.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 6 for full code.\n\n```json:metadata\n{\"files\": [\"src/bni-client/member-detail.ts\", \"tests/fixtures/member-detail/profile.html\", \"tests/bni-client/member-detail.test.ts\"], \"verifyCommand\": \"npx vitest run tests/bni-client/member-detail.test.ts\", \"acceptanceCriteria\": [\"parses all documented fields from the fixture\", \"non-OK response returns null\", \"empty body returns null\", \"profileUrl matches memberdetails-derived URL\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Chapter info client",
+      "status": "completed",
+      "description": "**Goal:** Given a chapter's encodedChapterId, fetch its public meeting logistics (day/time/type, address, member count, visit link) from the chapterInfo JSON endpoint.\n\n**Files:**\n- Create: `src/bni-client/chapter-info.ts`\n- Create: `tests/fixtures/chapter-info/found.json`\n- Create: `tests/fixtures/chapter-info/not-found.json`\n- Test: `tests/bni-client/chapter-info.test.ts`\n\n**Acceptance Criteria:**\n- [ ] Parses all fields from the fixture (real, previously-verified chapter data)\n- [ ] Combines addressLine1/addressLine2 into one address string, omitting empty parts\n- [ ] Returns null when chapterDetails is absent/empty\n- [ ] Returns null on non-OK HTTP response\n\n**Verify:** `npx vitest run tests/bni-client/chapter-info.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 7 for full code.\n\n```json:metadata\n{\"files\": [\"src/bni-client/chapter-info.ts\", \"tests/fixtures/chapter-info/found.json\", \"tests/fixtures/chapter-info/not-found.json\", \"tests/bni-client/chapter-info.test.ts\"], \"verifyCommand\": \"npx vitest run tests/bni-client/chapter-info.test.ts\", \"acceptanceCriteria\": [\"parses all fields from the fixture\", \"combines address lines correctly\", \"returns null when chapterDetails absent\", \"returns null on non-OK response\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Events client (calendar + detail)",
+      "status": "completed",
+      "description": "**Goal:** List upcoming public events for a site (one calendar request per internal country ID, merged) and fetch a single event's full detail using structural extraction (not label text, which is unreliably localized).\n\n**Files:**\n- Create: `src/bni-client/events.ts`\n- Create: `tests/fixtures/events/calendar-country-111.json`\n- Create: `tests/fixtures/events/calendar-country-222.json`\n- Create: `tests/fixtures/events/detail.html`\n- Test: `tests/bni-client/events.test.ts`\n\n**Acceptance Criteria:**\n- [ ] getUpcomingEvents issues one calendar request per comma-separated countryIds entry, merges by id (dedup), sorted by start ascending\n- [ ] getEventDetail extracts title, description, contact name/phone, costs, location, registration count structurally\n- [ ] getEventDetail returns null on redirect response or missing title\n\n**Verify:** `npx vitest run tests/bni-client/events.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 8 for full code.\n\n```json:metadata\n{\"files\": [\"src/bni-client/events.ts\", \"tests/fixtures/events/calendar-country-111.json\", \"tests/fixtures/events/calendar-country-222.json\", \"tests/fixtures/events/detail.html\", \"tests/bni-client/events.test.ts\"], \"verifyCommand\": \"npx vitest run tests/bni-client/events.test.ts\", \"acceptanceCriteria\": [\"one calendar request per country ID, merged and deduped by event id, sorted by start\", \"event detail extracted structurally not via label text\", \"redirect/no-title response returns null\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Regions + event types client",
+      "status": "completed",
+      "description": "**Goal:** List a site's official regions and official event-type names (live), so callers can discover good search terms for bni_upcoming_events without needing internal numeric IDs.\n\n**Files:**\n- Create: `src/bni-client/regions.ts`\n- Create: `tests/fixtures/regions/regions-country-111.json`\n- Create: `tests/fixtures/regions/event-types-country-111.json`\n- Create: `tests/fixtures/regions/event-types-country-222.json`\n- Test: `tests/bni-client/regions.test.ts`\n\n**Acceptance Criteria:**\n- [ ] getRegions returns {id, name} pairs from fixture for a single country id\n- [ ] getEventTypeNames merges names across multiple country IDs, deduplicated, country suffix stripped, sorted alphabetically\n\n**Verify:** `npx vitest run tests/bni-client/regions.test.ts` \u2192 all tests pass\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 9 for full code.\n\n```json:metadata\n{\"files\": [\"src/bni-client/regions.ts\", \"tests/fixtures/regions/regions-country-111.json\", \"tests/fixtures/regions/event-types-country-111.json\", \"tests/fixtures/regions/event-types-country-222.json\", \"tests/bni-client/regions.test.ts\"], \"verifyCommand\": \"npx vitest run tests/bni-client/regions.test.ts\", \"acceptanceCriteria\": [\"getRegions returns id/name pairs from fixture\", \"getEventTypeNames merges/dedupes across country IDs with country suffix stripped, sorted\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Site resolver + MCP bootstrap + simple tools",
+      "status": "completed",
+      "description": "**Goal:** Country\u2192sites resolver with fan-out cap, MCP server bootstrap with all 10 tool schemas registered, and the 3 tools needing no per-site discovery: bni_list_countries, bni_list_professions, bni_enrich_member.\n\n**Files:**\n- Create: `src/registry/resolve.ts`\n- Create: `src/index.ts`\n- Test: `tests/registry/resolve.test.ts`\n\n**Acceptance Criteria:**\n- [ ] resolveSitesForCountry returns matching sites (case-insensitive) under cap, reports true totalKnown when capped\n- [ ] resolveSiteById finds/misses correctly\n- [ ] All 10 tool schemas present in ListToolsRequestSchema handler\n- [ ] bni_list_countries groups sites by country code\n- [ ] bni_list_professions mirrors old filtering via src/taxonomy.ts\n- [ ] bni_enrich_member is pure, no network, English\n- [ ] Remaining 7 handlers stubbed as not-yet-implemented (completed in Tasks 11-12)\n\n**Verify:** `npx vitest run tests/registry/resolve.test.ts && npm run build` \u2192 tests pass, build succeeds\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 10 for full code.\n\n```json:metadata\n{\"files\": [\"src/registry/resolve.ts\", \"src/index.ts\", \"tests/registry/resolve.test.ts\"], \"verifyCommand\": \"npx vitest run tests/registry/resolve.test.ts && npm run build\", \"acceptanceCriteria\": [\"resolveSitesForCountry caps results but reports true totalKnown\", \"resolveSiteById finds/misses correctly\", \"all 10 tool schemas registered\", \"bni_list_countries/bni_list_professions/bni_enrich_member fully implemented and English\", \"remaining 7 tools stubbed as not-yet-implemented\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        1,
+        2,
+        4
+      ]
+    },
+    {
+      "id": 11,
+      "subject": "Task 11: Fan-out tools (search, events, regions, event types)",
+      "status": "completed",
+      "description": "**Goal:** Wire the four country-scoped tools that fan out sequentially over every resolved site for a country, merging results and transparently reporting capped/partial coverage.\n\n**Context:** No new unit-test file \u2014 index.ts's dispatch is orchestration glue over already-unit-tested modules (Tasks 3, 5, 6, 8, 9). Verification is a live manual smoke test (design keeps live verification manual/ad-hoc, not CI). Note: event.id (BniEvent's internal numeric id) and the encoded eventId string bni_event_detail needs are different values \u2014 extract the encoded one from event.url via extractEncodedParam (from Task 6's member-detail.ts).\n\n**Files:**\n- Modify: `src/index.ts` (add imports; add 4 tool-handler blocks; shrink stub list to remaining 3 tools)\n\n**Acceptance Criteria:**\n- [ ] Each tool resolves sites via resolveSitesForCountry, clear error if none registered\n- [ ] Sites queried sequentially (for...of with await, never Promise.all)\n- [ ] Per-site failure caught, named in output, doesn't block other sites\n- [ ] Capped coverage explicitly reported when totalKnown > sites.length\n- [ ] bni_search shows source site per member\n- [ ] bni_upcoming_events supports daysAhead (default 60) and search filter\n- [ ] bni_upcoming_events shows the encoded eventId (from event.url), not the internal numeric event.id\n\n**Verify:** `npm run build`, then manual stdio smoke test against real bni.de for bni_search and bni_upcoming_events \u2192 real non-empty results\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 11 for full code.\n\n```json:metadata\n{\"files\": [\"src/index.ts\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"4 tools resolve sites and fan out sequentially\", \"per-site failures caught and named, other sites still return\", \"capped coverage reported explicitly\", \"bni_search shows source site per member\", \"bni_upcoming_events shows encoded eventId not internal numeric id\", \"live smoke test against bni.de returns real results\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        10,
+        5,
+        8,
+        9,
+        6
+      ]
+    },
+    {
+      "id": 12,
+      "subject": "Task 12: Single-site composed tools (member detail, chapter gaps, event detail)",
+      "status": "completed",
+      "description": "**Goal:** Wire the remaining three tools: bni_member_detail, bni_chapter_gaps (search + chapter-info + taxonomy whitespace analysis), bni_event_detail.\n\n**Files:**\n- Modify: `src/index.ts` (add imports; add 3 tool-handler blocks; remove now-empty stub check)\n\n**Acceptance Criteria:**\n- [ ] bni_member_detail resolves site, fetches profile, enriches with chapter info if chapterId found\n- [ ] Unknown site id or discovery failure returns clear error, not a crash\n- [ ] bni_chapter_gaps fans out to find chapter members, runs full category-whitespace analysis, degrades gracefully if taxonomy unreachable\n- [ ] bni_chapter_gaps resolves one representative member's chapter info for meeting header\n- [ ] bni_event_detail accepts raw event id or full eventdetails URL\n- [ ] No \"Not yet implemented\" stub remains\n\n**Verify:** `npm run build`, then manual stdio smoke test calling bni_chapter_gaps with a real chapter name and country DE \u2192 full output renders\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 12 for full code.\n\n```json:metadata\n{\"files\": [\"src/index.ts\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"bni_member_detail enriches with chapter info when chapterId present\", \"unknown site or discovery failure returns clear error not crash\", \"bni_chapter_gaps runs full category whitespace analysis with graceful taxonomy-unavailable degradation\", \"bni_event_detail accepts raw id or full URL\", \"no stub remains, live smoke test succeeds\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        11,
+        6,
+        7
+      ]
+    },
+    {
+      "id": 13,
+      "subject": "Task 13: README with mandatory ToS disclaimer",
+      "status": "completed",
+      "description": "**Goal:** A new, English-only README written from this project's actual scope, documenting all 10 tools and stating the ToS risk plainly (no \"personal use is exempt\" framing).\n\n**Files:**\n- Create: `README.md`\n\n**Acceptance Criteria:**\n- [ ] Documents all 10 tools with purpose\n- [ ] Explains country/site registry model (multi-site countries, bni_list_countries as discovery entry point)\n- [ ] States plainly BNI ToS \"No Automated Querying\" risk, personal/informational use at own risk, higher-stakes use should seek permission/legal advice \u2014 no personal-use-exempt claim\n- [ ] Mentions rate limiting and why\n- [ ] Installation section for npx mcp-bni\n\n**Verify:** Manual read-through against acceptance criteria (documentation task, no automated check besides a grep sanity check)\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 13 for full README content.\n\n```json:metadata\n{\"files\": [\"README.md\"], \"verifyCommand\": \"grep -q 'No Automated Querying' README.md && grep -q 'not resolved by personal' README.md\", \"acceptanceCriteria\": [\"all 10 tools documented\", \"country/site registry model explained\", \"ToS risk stated plainly without personal-use-exempt framing\", \"rate limiting explained\", \"npx installation documented\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        12
+      ]
+    },
+    {
+      "id": 14,
+      "subject": "Task 14: Migrate skill files to English",
+      "status": "completed",
+      "description": "**Goal:** Port bni-prospecting.md and bni-chapter-prep.md fully to English and update tool-call references for the new country-scoped signatures.\n\n**Files:**\n- Create: `skills/bni-prospecting.md`\n- Create: `skills/bni-chapter-prep.md`\n\n**Acceptance Criteria:**\n- [ ] Both files fully English (no leftover German words in headers/output format)\n- [ ] Every bni_search/bni_chapter_gaps reference includes the required country argument\n- [ ] Example usage sections use English example prompts\n\n**Verify:** Manual read-through \u2014 no German words remain, tool call examples match current schemas\n\nSee docs/superpowers/plans/2026-09-25-bni-global-rewrite.md Task 14 for full content.\n\n```json:metadata\n{\"files\": [\"skills/bni-prospecting.md\", \"skills/bni-chapter-prep.md\"], \"verifyCommand\": \"grep -riE 'beruf|firma|mitglieder|datum|branchenl' skills/*.md || echo clean\", \"acceptanceCriteria\": [\"both files fully English\", \"bni_search/bni_chapter_gaps references include country argument\", \"example prompts in English\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        12
+      ]
+    }
+  ],
+  "lastUpdated": "2026-09-25T21:20:00Z"
+}
