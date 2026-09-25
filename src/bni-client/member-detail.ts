@@ -31,6 +31,14 @@ export interface BniMemberDetail {
   favoriteStory?: string;
   title?: string;
   leaderFunctions?: string[];
+  /**
+   * Whether the bio widget used BNI's standard named sections ("structured") or one freetext
+   * block ("freetext") instead — undefined if the profile has no bio content at all. Explains
+   * *why* businessDescription/idealReferral/etc. can be absent even when the member didn't
+   * necessarily leave that specific question blank: a "freetext" profile has no such sections to
+   * begin with, which is a different, known fact from "structured but this one section is empty."
+   */
+  bioFormat?: 'structured' | 'freetext';
 }
 
 /** BNI's standard bio section headings (as rendered in the profile widget), matched case-insensitively, mapped to the field they fill. */
@@ -51,7 +59,7 @@ const BIO_SECTION_LABELS: Record<string, keyof BniMemberDetail> = {
  */
 function parseBioSections(paragraphs: string[]): Pick<
   BniMemberDetail,
-  'bio' | 'businessDescription' | 'idealReferral' | 'topProblemSolved' | 'idealReferralPartner' | 'topProduct' | 'favoriteStory'
+  'bio' | 'businessDescription' | 'idealReferral' | 'topProblemSolved' | 'idealReferralPartner' | 'topProduct' | 'favoriteStory' | 'bioFormat'
 > {
   const result: ReturnType<typeof parseBioSections> = {};
   let currentField: keyof BniMemberDetail | undefined;
@@ -80,10 +88,14 @@ function parseBioSections(paragraphs: string[]): Pick<
   flush();
 
   if (!sawHeading) {
-    if (introLines.length > 0) result.bio = introLines.join('\n\n');
+    if (introLines.length > 0) {
+      result.bio = introLines.join('\n\n');
+      result.bioFormat = 'freetext';
+    }
     return result;
   }
   if (introLines.length > 0) result.bio = introLines.join('\n\n');
+  result.bioFormat = 'structured';
   return result;
 }
 

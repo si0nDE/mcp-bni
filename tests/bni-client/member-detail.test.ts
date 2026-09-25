@@ -55,6 +55,7 @@ describe('getMemberDetail', () => {
     expect(detail!.chapter).toBe('Example Chapter');
     expect(detail!.chapterId).toBe('ZmFrZUNoYXB0ZXJJZA==');
     expect(detail!.bio).toBe('First bio paragraph.\n\nSecond bio paragraph, mentioning Chapterdirektor/in role.');
+    expect(detail!.bioFormat).toBe('freetext');
     expect(detail!.leaderFunctions).toEqual(['Chapterdirektor/in']);
     expect(detail!.profileUrl).toBe(
       'https://example-bni.test/en/memberdetails?encryptedMemberId=ZmFrZUlkMTIz&name=Jane+Consultant'
@@ -85,5 +86,6 @@ describe('getMemberDetail', () => {
     expect(detail!.idealReferralPartner).toBe('Corporate lawyers and financial advisors.');
     expect(detail!.topProduct).toBe('Annual tax optimization review.');
     expect(detail!.favoriteStory).toBe('Closed a five-figure deal from a single referral.');
+    expect(detail!.bioFormat).toBe('structured');
   });
 });

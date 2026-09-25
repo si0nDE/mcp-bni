@@ -266,7 +266,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_chapter_gaps',
       description:
-        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories). Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its result cap.',
+        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories). Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its result cap. The taxonomy itself is German-only; a member\'s own free-text profession can be in a different language, which is the usual cause when it shows up as "unmatched" rather than being a data error — translate as needed for the person you\'re presenting results to.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -337,7 +337,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'bni_list_professions',
-      description: 'Lists the official BNI worldwide profession catalog (professions + categories), searchable and filterable.',
+      description:
+        'Lists the official BNI worldwide profession catalog (professions + categories), searchable and filterable. Names are German-only (the taxonomy source has no other-language variant) — translate for the person you\'re presenting results to if needed.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -720,9 +721,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         detail.company ? `Company: ${detail.company}` : null,
         detail.profession ? `Profession: ${detail.profession}` : null,
         detail.chapter ? `Chapter: ${detail.chapter}` : null,
-        detail.phone ? `Phone: ${detail.phone}` : null,
-        detail.email ? `Email: ${detail.email}` : null,
-        detail.website ? `Website: ${detail.website}` : null,
+        `Phone: ${detail.phone ?? '(not shown on the public profile)'}`,
+        `Email: ${detail.email ?? '(not shown on the public profile)'}`,
+        `Website: ${detail.website ?? '(not shown on the public profile)'}`,
         detail.leaderFunctions?.length ? `Volunteer role: ${detail.leaderFunctions.join(', ')}` : null,
         chapterInfo
           ? [
@@ -738,6 +739,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ]
               .filter(Boolean)
               .join('\n')
+          : null,
+        detail.bioFormat === 'freetext'
+          ? `\n(Profile uses one freetext bio, not BNI's structured sections — no separate My Business/Top Product/Ideal Referral/Ideal Referral Partner/Top Problem Solved/Favorite BNI Story fields exist for this member, rather than those specifically being left blank.)`
           : null,
         detail.bio ? `\nBio: ${detail.bio}` : null,
         detail.businessDescription ? `\nMy Business: ${detail.businessDescription}` : null,
@@ -834,7 +838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     `\n**Fully unoccupied categories (full whitespace potential):**\n${emptyCategories.map((c) => `  - ${c.name}`).join('\n') || '  (none — every category represented)'}`,
                     `\n**Categories with low coverage (1-2 members) — specific open professions:**\n${thinCategoryList || '  (no thinly-covered categories)'}`,
                     unmatched.size > 0
-                      ? `\n**Unmatched free-text professions** (not in the official catalog — possibly a typo or niche profession):\n${[...unmatched].map((p) => `  - ${p}`).join('\n')}`
+                      ? `\n**Unmatched free-text professions** (no match in the official catalog, which is German-only — likely because the member's stored profession text is in a different language, rather than a typo or a genuinely uncategorized profession; translate if useful before presenting to the user):\n${[...unmatched].map((p) => `  - ${p}`).join('\n')}`
                       : '',
                   ]
                     .filter(Boolean)
