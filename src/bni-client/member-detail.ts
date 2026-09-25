@@ -15,9 +15,76 @@ export interface BniMemberDetail {
   phone?: string;
   email?: string;
   website?: string;
+  /** Any bio text found before the first recognized section heading (or the whole bio, if none were found). */
   bio?: string;
+  /** "My Business" section, when the profile breaks its bio into BNI's standard named sections. */
+  businessDescription?: string;
+  /** "Ideal Referral" section. */
+  idealReferral?: string;
+  /** "Top Problem Solved" section. */
+  topProblemSolved?: string;
+  /** "My Ideal Referral Partner" section — who to introduce this member to. */
+  idealReferralPartner?: string;
+  /** "Top Product" section. */
+  topProduct?: string;
+  /** "My Favorite BNI Story" section. */
+  favoriteStory?: string;
   title?: string;
   leaderFunctions?: string[];
+}
+
+/** BNI's standard bio section headings (as rendered in the profile widget), matched case-insensitively, mapped to the field they fill. */
+const BIO_SECTION_LABELS: Record<string, keyof BniMemberDetail> = {
+  'my business': 'businessDescription',
+  'ideal referral': 'idealReferral',
+  'top problem solved': 'topProblemSolved',
+  'my ideal referral partner': 'idealReferralPartner',
+  'top product': 'topProduct',
+  'my favorite bni story': 'favoriteStory',
+};
+
+/**
+ * Splits the bio widget's paragraphs into named sections wherever a paragraph's own text is one of
+ * BNI's standard headings — the widget renders headings as plain paragraphs, not <h*> tags, so a
+ * heading is identified by exact text match rather than markup. Paragraphs before the first
+ * recognized heading become `bio`; if no heading is recognized at all, every paragraph does.
+ */
+function parseBioSections(paragraphs: string[]): Pick<
+  BniMemberDetail,
+  'bio' | 'businessDescription' | 'idealReferral' | 'topProblemSolved' | 'idealReferralPartner' | 'topProduct' | 'favoriteStory'
+> {
+  const result: ReturnType<typeof parseBioSections> = {};
+  let currentField: keyof BniMemberDetail | undefined;
+  let currentLines: string[] = [];
+  const introLines: string[] = [];
+  let sawHeading = false;
+
+  const flush = () => {
+    if (currentField && currentLines.length > 0) {
+      (result as Record<string, string>)[currentField] = currentLines.join('\n\n');
+    }
+    currentLines = [];
+  };
+
+  for (const text of paragraphs) {
+    const field = BIO_SECTION_LABELS[text.toLowerCase()];
+    if (field) {
+      flush();
+      currentField = field;
+      sawHeading = true;
+      continue;
+    }
+    if (currentField) currentLines.push(text);
+    else introLines.push(text);
+  }
+  flush();
+
+  if (!sawHeading) {
+    if (introLines.length > 0) result.bio = introLines.join('\n\n');
+    return result;
+  }
+  if (introLines.length > 0) result.bio = introLines.join('\n\n');
+  return result;
 }
 
 /** Extracts and decodes a query-string parameter from a (possibly relative) URL/href string. */
@@ -107,16 +174,17 @@ export async function getMemberDetail(
     }
   });
 
-  const bio =
-    $('.widgetMemberTxtVideo p')
-      .map((_, el) => $(el).text().trim())
-      .get()
-      .filter(Boolean)
-      .join('\n\n') || undefined;
+  const bioParagraphs = $('.widgetMemberTxtVideo p')
+    .map((_, el) => $(el).text().trim())
+    .get()
+    .filter(Boolean);
+  const bioSections = parseBioSections(bioParagraphs);
+  // Leader-function detection scans the full bio text regardless of which section it ended up in.
+  const fullBioText = bioParagraphs.join('\n\n') || undefined;
 
   const pageTitle = $('h2').first().text().trim();
   const { title, name: cleanName } = await stripAcademicTitle(pageTitle || name);
-  const leaderFunctions = await detectLeaderFunctions(bio);
+  const leaderFunctions = await detectLeaderFunctions(fullBioText);
 
   return {
     name: cleanName,
@@ -129,7 +197,7 @@ export async function getMemberDetail(
     phone,
     email,
     website,
-    bio,
+    ...bioSections,
     title,
     leaderFunctions: leaderFunctions.length > 0 ? leaderFunctions : undefined,
   };

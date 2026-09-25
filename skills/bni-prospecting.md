@@ -17,7 +17,7 @@ You help find BNI members who are ideal targets for a specific product, service,
 
 4. **Filter**: From results, identify the 5-10 best matches based on profession + company fit.
 
-5. **Enrich top matches**: For the top 5, call `bni_enrich_member` to get LinkedIn/website search links.
+5. **Enrich top matches**: For the top 5, call `bni_member_detail` first — its "Ideal Referral Partner" and "Ideal Referral" sections (when the profile has them) often state directly whether this person is a fit, which beats guessing from profession alone. Then call `bni_enrich_member` to get LinkedIn/website search links.
 
 6. **Draft outreach**: For each top match, write a short personalized 1:1 meeting request:
    - Reference their specific profession/specialty

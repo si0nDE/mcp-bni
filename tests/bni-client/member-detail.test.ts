@@ -72,4 +72,18 @@ describe('getMemberDetail', () => {
     const detail = await getMemberDetail(testSite, testConfig, 'ZmFrZUlkMTIz', 'Jane Consultant');
     expect(detail).toBeNull();
   });
+
+  it('splits the bio into named sections when the profile has them', async () => {
+    mockFetchWithFixture('profile-with-sections.html');
+    const detail = await getMemberDetail(testSite, testConfig, 'ZmFrZUlkMTIz', 'Jane Consultant');
+
+    expect(detail).not.toBeNull();
+    expect(detail!.bio).toBe('Intro paragraph before any heading.');
+    expect(detail!.businessDescription).toBe('We help clients optimize taxes.');
+    expect(detail!.idealReferral).toBe('Business owners with 10+ employees.');
+    expect(detail!.topProblemSolved).toBe("Reduced a client's tax burden by 30%.");
+    expect(detail!.idealReferralPartner).toBe('Corporate lawyers and financial advisors.');
+    expect(detail!.topProduct).toBe('Annual tax optimization review.');
+    expect(detail!.favoriteStory).toBe('Closed a five-figure deal from a single referral.');
+  });
 });

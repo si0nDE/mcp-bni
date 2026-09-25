@@ -7,9 +7,10 @@ MCP server for searching BNI (Business Network International) members and chapte
 | Tool | Purpose |
 |---|---|
 | `bni_search` | Search members in a country (fans out across every registered site for that country) |
-| `bni_member_detail` | Full public profile: phone, email, website, bio, chapter, chapter meeting info |
-| `bni_chapter_gaps` | Whitespace analysis for a chapter against the official BNI profession taxonomy |
+| `bni_member_detail` | Full public profile: phone, email, website, chapter, chapter meeting info, and bio split into BNI's standard sections (My Business, Ideal Referral, Ideal Referral Partner, Top Problem Solved, Top Product, Favorite BNI Story) where the profile has them |
+| `bni_chapter_gaps` | Whitespace analysis for a chapter against the official BNI profession taxonomy — resolves the chapter exactly via `bni_list_chapters` where possible, instead of an approximate keyword search |
 | `bni_list_countries` | Every registered country code and its known site(s) |
+| `bni_list_chapters` | Exact chapter names (and internal ids) for a country, where the site exposes them |
 | `bni_upcoming_events` | Public events (trainings, webinars, regional visitor days) |
 | `bni_event_detail` | Full event details: contact, cost, location, registration count |
 | `bni_list_regions` | Official BNI regions for a country |
@@ -26,6 +27,8 @@ New sites are added by finding their public "find a member" page URL — no reve
 ## Known limitation: broad keyword matching
 
 BNI's own member-search "keywords" field does broad, OR-style full-text matching across name, profession, and company rather than an exact/AND filter. A common word or a multi-word phrase (e.g. a full chapter name, which usually contains "BNI" plus a city) can match far more members than intended, up to the ~250-per-site result cap, effectively returning an unfiltered listing rather than the narrow result you'd expect. `bni_search` detects when a site's result count looks suspiciously high and flags it explicitly in the response so this isn't silent — but the underlying matching behavior itself is BNI's, not something this tool can filter away. Prefer distinctive, specific keywords, and add `city` to narrow further.
+
+For chapters specifically, this is avoidable: many sites expose their own chapter filter as a dropdown of exact names, which `bni_list_chapters` reads directly and `bni_chapter_gaps` uses automatically when a match is found — that returns the chapter's complete roster with no keyword involved and no cap. Sites that don't expose this dropdown fall back to the keyword heuristic above, and are noted as such in the response.
 
 ## Claude Skills
 

@@ -63,4 +63,22 @@ describe('searchMembers', () => {
     mockFetchWithFixture('results.html', false);
     await expect(searchMembers(testSite, testConfig, {})).rejects.toThrow(/test-site/);
   });
+
+  it('scopes the query by chapterId instead of keywords when both are given', async () => {
+    let sentBody = '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        sentBody = String(init?.body ?? '');
+        const html = readFileSync(join(FIXTURES_DIR, 'results.html'), 'utf-8');
+        return new Response(html, { status: 200 });
+      })
+    );
+
+    await searchMembers(testSite, testConfig, { keywords: 'consultant', chapterId: '501' });
+
+    const parameters = new URLSearchParams(new URLSearchParams(sentBody).get('parameters') ?? '');
+    expect(parameters.get('chapterName')).toBe('501');
+    expect(parameters.get('keywords')).toBe('');
+  });
 });

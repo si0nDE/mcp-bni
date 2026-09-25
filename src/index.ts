@@ -9,6 +9,7 @@ import { discoverSiteConfig } from './registry/discovery';
 import { searchMembers, BniMember } from './bni-client/search';
 import { getUpcomingEvents, getEventDetail, BniEvent } from './bni-client/events';
 import { getRegions, getEventTypeNames } from './bni-client/regions';
+import { listChapterOptions, findChapterOption, BniChapterOption } from './bni-client/chapters';
 import { getMemberDetail, extractEncodedParam } from './bni-client/member-detail';
 import { getChapterInfo, BniChapterInfo } from './bni-client/chapter-info';
 import { BniSite } from './registry/types';
@@ -79,7 +80,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'bni_member_detail',
-      description: 'Fetches a member\'s full public profile (phone, email, website, bio, title, chapter, chapter meeting info if resolvable).',
+      description:
+        'Fetches a member\'s full public profile: phone, email, website, title, chapter, chapter meeting info if resolvable, and their bio broken into BNI\'s standard sections where available (My Business, Top Product, Ideal Referral, Ideal Referral Partner, Top Problem Solved, Favorite BNI Story) — the Ideal Referral Partner section is the most direct signal for who to introduce this member to.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -93,7 +95,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_chapter_gaps',
       description:
-        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories).',
+        'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories). Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its result cap.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -136,6 +138,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_list_regions',
       description: 'Lists the official BNI regions for a country.',
+      inputSchema: { type: 'object', properties: { ...COUNTRY_PROP }, required: ['country'] },
+    },
+    {
+      name: 'bni_list_chapters',
+      description:
+        'Lists the exact, complete chapter names for a country, where available. Chapters found this way can be searched exactly via bni_chapter_gaps without keyword guesswork or the 250-result cap; sites that don\'t expose this list are noted as such.',
       inputSchema: { type: 'object', properties: { ...COUNTRY_PROP }, required: ['country'] },
     },
     {
@@ -387,6 +395,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: `**${regions.length} regions**${notes}\n\n${regions.map((r) => `  - ${r}`).join('\n')}` }] };
     }
 
+    if (name === 'bni_list_chapters') {
+      const { country } = args as { country: string };
+      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+      if (sites.length === 0) return noSiteError(country);
+
+      const chaptersBySite: Array<{ site: string; chapters: BniChapterOption[] }> = [];
+      const unsupportedSites: string[] = [];
+      const failedSites: string[] = [];
+      for (const site of sites) {
+        try {
+          const chapters = await listChapterOptions(site);
+          if (chapters.length === 0) unsupportedSites.push(site.id);
+          else chaptersBySite.push({ site: site.id, chapters });
+        } catch (err) {
+          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+
+      const notes =
+        coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
+        (unsupportedSites.length > 0
+          ? `\n(No chapter listing exposed for: ${unsupportedSites.join(', ')} — bni_chapter_gaps falls back to keyword search there.)`
+          : '');
+
+      const totalChapters = chaptersBySite.reduce((sum, s) => sum + s.chapters.length, 0);
+      if (totalChapters === 0) {
+        return { content: [{ type: 'text', text: `No chapter listing available for "${country}".${notes}` }] };
+      }
+
+      const text = chaptersBySite
+        .map(
+          ({ site, chapters }) =>
+            `**${site}** (${chapters.length})\n${chapters.map((c) => `  - ${c.name}`).join('\n')}`
+        )
+        .join('\n\n');
+
+      return { content: [{ type: 'text', text: `**${totalChapters} chapters**${notes}\n\n${text}` }] };
+    }
+
     if (name === 'bni_list_event_types') {
       const { country } = args as { country: string };
       const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
@@ -464,6 +511,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               .join('\n')
           : null,
         detail.bio ? `\nBio: ${detail.bio}` : null,
+        detail.businessDescription ? `\nMy Business: ${detail.businessDescription}` : null,
+        detail.topProduct ? `\nTop Product: ${detail.topProduct}` : null,
+        detail.idealReferral ? `\nIdeal Referral: ${detail.idealReferral}` : null,
+        detail.idealReferralPartner ? `\nIdeal Referral Partner (who to introduce them to): ${detail.idealReferralPartner}` : null,
+        detail.topProblemSolved ? `\nTop Problem Solved: ${detail.topProblemSolved}` : null,
+        detail.favoriteStory ? `\nFavorite BNI Story: ${detail.favoriteStory}` : null,
         `\nProfile: ${detail.profileUrl}`,
       ].filter(Boolean);
 
@@ -496,10 +549,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const allResults: Array<{ site: BniSite; member: BniMember }> = [];
       const failedSites: string[] = [];
+      let exactChapterMatch = false;
       for (const site of sites) {
         try {
           const config = await discoverSiteConfig(site);
-          const members = await searchMembers(site, config, { keywords: searchToken });
+          // Prefer the site's own chapter listing, when it has one: an exact match there gives the
+          // chapter's complete roster directly, skipping the keyword heuristic (and its cap) below.
+          // Tried against the caller's full chapterName first, then the same distinctive token used
+          // for the keyword fallback (the two rarely render identically — e.g. one may carry a
+          // "(City)" suffix the other doesn't).
+          const chapterOptions = await listChapterOptions(site).catch(() => []);
+          const chapterOption = findChapterOption(chapterOptions, chapterName) ?? findChapterOption(chapterOptions, searchToken);
+          const members = await searchMembers(
+            site,
+            config,
+            chapterOption ? { chapterId: chapterOption.id } : { keywords: searchToken }
+          );
+          if (chapterOption) exactChapterMatch = true;
           for (const member of members) allResults.push({ site, member });
         } catch (err) {
           failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
@@ -511,7 +577,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ({ member }) => member.chapter.toLowerCase().includes(nameNorm) || member.region.toLowerCase().includes(nameNorm)
       );
       const useResults = chapterMembers.length > 0 ? chapterMembers : allResults;
-      const notes = coverageAndFailureNotes(sites.length, totalKnown, country, failedSites);
+      const notes =
+        coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
+        (exactChapterMatch
+          ? ''
+          : '\n(No exact chapter listing found for this name — used keyword search instead, which may be incomplete or approximate. Try bni_list_chapters for the exact name.)');
 
       if (useResults.length === 0) {
         return { content: [{ type: 'text', text: `No members found for chapter "${chapterName}".${notes}` }] };

@@ -17,6 +17,8 @@ export interface BniMember {
 export interface SearchParams {
   keywords?: string;
   city?: string;
+  /** A chapter id from listChapterOptions — scopes the query to that chapter's exact, complete roster instead of a keyword match (and its ~250 result cap). Takes precedence over `keywords` when both are set. */
+  chapterId?: string;
   language?: BniSiteLanguage;
 }
 
@@ -38,8 +40,11 @@ export async function searchMembers(
 
   const innerParams = new URLSearchParams();
   innerParams.set('countryIds', config.countryIds);
-  innerParams.set('keywords', params.keywords ?? '');
+  innerParams.set('keywords', params.chapterId ? '' : params.keywords ?? '');
   if (params.city) innerParams.set('city', params.city);
+  // Matches the value attribute of the site's own chapterName <select> (see chapters.ts) —
+  // scoping by this id returns the chapter's exact roster, not a keyword match.
+  if (params.chapterId) innerParams.set('chapterName', params.chapterId);
   innerParams.set('submit', '');
 
   const body = new URLSearchParams();
