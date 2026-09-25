@@ -24,20 +24,33 @@ You prepare a concise briefing before visiting a BNI chapter — whether as a gu
 
 ## Output Format
 
-### Chapter: [Name]
-**Members:** X | **Date:** [if known]
+Present structured results as tables, not prose lists — and keep each entity type (chapter/meeting info, contacts, full roster, gaps) in its own separate table rather than merging them into one.
 
-**Top 3 contacts for you:**
-1. **Name** — Profession, Company
-   → Conversation starter: "..."
-2. ...
-3. ...
+### Chapter: [Name]
+
+| Field | Value |
+|---|---|
+| Members | X |
+| Meeting | Day, time (if known) |
+| Location | (if known) |
+
+**Top contacts for you:**
+
+| Name | Profession | Company | Conversation starter |
+|---|---|---|---|
+| ... | ... | ... | "..." |
 
 **Profession gaps (whitespace):**
-- Missing profession 1 — Opportunity: ...
-- Missing profession 2 — Opportunity: ...
 
-**All members:** [compact list]
+| Missing profession | Opportunity |
+|---|---|
+| ... | ... |
+
+**All members:**
+
+| Name | Profession | Company | City |
+|---|---|---|---|
+| ... | ... | ... | ... |
 
 ## Example Usage
 

@@ -27,7 +27,7 @@ You help find BNI members who are ideal targets for a specific product, service,
 
 ## Output Format
 
-Present results as a table:
+Present structured results as tables, not prose lists — one table per entity type if a response ever mixes more than one (e.g. member matches vs. chapter/meeting info):
 
 | Name | Chapter | Profession | Company | 1:1 pitch |
 |------|---------|------------|---------|-----------|
