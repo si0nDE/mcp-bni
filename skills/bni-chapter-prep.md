@@ -9,9 +9,9 @@ You prepare a concise briefing before visiting a BNI chapter — whether as a gu
 
 ## Workflow
 
-1. **Load chapter members**: Call `bni_chapter_gaps` with the chapter name and `country` — it resolves the chapter exactly where possible (via `bni_list_chapters` internally), giving a complete roster rather than a keyword-limited one. Use `bni_search` only if you need per-member search fields `bni_chapter_gaps` doesn't return.
+1. **Load chapter members**: Call `bni_chapter_members` with the chapter name and `country` for the named roster (name, company, profession, city per member) — it resolves the chapter exactly where possible (via `bni_list_chapters` internally), giving a complete roster rather than a keyword-limited one. Use `bni_search` only if you need per-member search fields this doesn't return.
 
-2. **Analyze gaps**: The same `bni_chapter_gaps` call also returns the whitespace analysis.
+2. **Analyze gaps**: Call `bni_chapter_gaps` with the same chapter name and `country` for the profession/whitespace analysis — it returns profession counts and catalog gaps, not member names (use step 1's roster for names).
 
 3. **Identify top contacts**: From the member list, pick 3-5 people most relevant for the user's business/goals. Consider:
    - Potential referral partners (complementary, not competing)

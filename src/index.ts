@@ -91,6 +91,103 @@ function formatCompactLine(entry: { site: string; member: BniMember }, index: nu
   return `${index + 1}. ${fields.map((f) => fieldValue(entry, f)).join(' | ')}`;
 }
 
+interface ChapterResolution {
+  useResults: Array<{ site: BniSite; member: BniMember }>;
+  chapterInfo: BniChapterInfo | null;
+  notes: string;
+}
+
+/**
+ * Shared chapter-roster resolution for bni_chapter_gaps and bni_chapter_members: prefers each
+ * site's own chapter dropdown (an exact match there gives the complete roster directly, no
+ * keyword search or its ~250 cap involved) and only falls back to a narrowed keyword search when
+ * a site doesn't expose one.
+ */
+async function resolveChapterMembers(
+  country: string,
+  chapterName: string
+): Promise<{ resolution: ChapterResolution } | { errorResponse: ReturnType<typeof noSiteError> }> {
+  const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
+  if (sites.length === 0) return { errorResponse: noSiteError(country) };
+
+  // Live-verified bug fix: BNI's own member-search "keywords" field does a broad, seemingly
+  // OR-based full-text match rather than an exact/AND filter, and is easily swamped. Chapter
+  // names (as rendered in bni_search's own "Chapter:" field, which is what a caller naturally
+  // passes here) almost always contain the near-universal word "BNI" plus a "(City)" suffix.
+  // Passing that full string verbatim as `keywords` was verified live against bni.de to return a
+  // near-max-cap, effectively unfiltered listing that can silently omit the target chapter's own
+  // members entirely (e.g. "Jet BNI (München)" as keywords returned 249 members, none of them
+  // actually in that chapter), which the exact-match filter below then has nothing to recover —
+  // producing a wrong-chapter report with no error. Stripping the noise words down to the
+  // chapter's own distinctive name (e.g. "Jet") keeps the candidate pool small enough that the
+  // exact filter below can actually find the right chapter (verified live: "Jet" alone returns 67
+  // members that DO include "Jet BNI (München)").
+  const searchToken =
+    chapterName
+      .replace(/\bBNI\b/gi, '')
+      .replace(/\([^)]*\)/g, '')
+      .trim()
+      .split(/\s+/)[0] || chapterName;
+
+  const allResults: Array<{ site: BniSite; member: BniMember }> = [];
+  const failedSites: string[] = [];
+  let exactChapterMatch = false;
+  for (const site of sites) {
+    try {
+      const config = await discoverSiteConfig(site);
+      // Prefer the site's own chapter listing, when it has one: an exact match there gives the
+      // chapter's complete roster directly, skipping the keyword heuristic (and its cap) below.
+      // Tried against the caller's full chapterName first, then the same distinctive token used
+      // for the keyword fallback (the two rarely render identically — e.g. one may carry a
+      // "(City)" suffix the other doesn't).
+      const chapterOptions = await listChapterOptions(site).catch(() => []);
+      const chapterOption = findChapterOption(chapterOptions, chapterName) ?? findChapterOption(chapterOptions, searchToken);
+      const members = await searchMembers(
+        site,
+        config,
+        chapterOption ? { chapterId: chapterOption.id } : { keywords: searchToken }
+      );
+      if (chapterOption) exactChapterMatch = true;
+      for (const member of members) allResults.push({ site, member });
+    } catch (err) {
+      failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+
+  const nameNorm = chapterName.toLowerCase();
+  const chapterMembers = allResults.filter(
+    ({ member }) => member.chapter.toLowerCase().includes(nameNorm) || member.region.toLowerCase().includes(nameNorm)
+  );
+  const useResults = chapterMembers.length > 0 ? chapterMembers : allResults;
+  const notes =
+    coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
+    (exactChapterMatch
+      ? ''
+      : '\n(No exact chapter listing found for this name — used keyword search instead, which may be incomplete or approximate. Try bni_list_chapters for the exact name.)');
+
+  // Chapter meeting logistics, resolved via one representative member.
+  let chapterInfo: BniChapterInfo | null = null;
+  if (useResults.length > 0) {
+    const representative = useResults[0];
+    try {
+      const repConfig = await discoverSiteConfig(representative.site);
+      const repDetail = await getMemberDetail(
+        representative.site,
+        repConfig,
+        representative.member.encryptedMemberId,
+        representative.member.name
+      );
+      if (repDetail?.chapterId) {
+        chapterInfo = await getChapterInfo(representative.site, repDetail.chapterId);
+      }
+    } catch {
+      chapterInfo = null;
+    }
+  }
+
+  return { resolution: { useResults, chapterInfo, notes } };
+}
+
 const server = new Server({ name: 'mcp-bni', version: PACKAGE_VERSION }, { capabilities: { tools: {} } });
 
 const COUNTRY_PROP = {
@@ -150,6 +247,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: 'bni_chapter_gaps',
       description:
         'Analyzes a chapter: lists existing professions with counts, and identifies whitespace using the official BNI profession taxonomy (empty categories + specific open professions in thinly-covered categories). Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its result cap.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chapterName: { type: 'string', description: 'Chapter name (as it appears in search results)' },
+          ...COUNTRY_PROP,
+        },
+        required: ['chapterName', 'country'],
+      },
+    },
+    {
+      name: 'bni_chapter_members',
+      description:
+        'Lists every member of a chapter by name, with company/profession/city — a compact roster. Complements bni_chapter_gaps (which analyzes professions/whitespace but omits names) without needing a bni_search keyword workaround. Resolves the chapter exactly via bni_list_chapters where possible, avoiding keyword search and its 250-result cap.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -624,84 +734,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'bni_chapter_gaps') {
       const { chapterName, country } = args as { chapterName: string; country: string };
-      const { sites, totalKnown } = resolveSitesForCountry(country, FAN_OUT_CAP);
-      if (sites.length === 0) return noSiteError(country);
-
-      // Live-verified bug fix: BNI's own member-search "keywords" field does a broad, seemingly
-      // OR-based full-text match rather than an exact/AND filter, and is easily swamped. Chapter
-      // names (as rendered in bni_search's own "Chapter:" field, which is what a caller naturally
-      // passes here) almost always contain the near-universal word "BNI" plus a "(City)" suffix.
-      // Passing that full string verbatim as `keywords` was verified live against bni.de to return a
-      // near-max-cap, effectively unfiltered listing that can silently omit the target chapter's own
-      // members entirely (e.g. "Jet BNI (München)" as keywords returned 249 members, none of them
-      // actually in that chapter), which the exact-match filter below then has nothing to recover —
-      // producing a wrong-chapter report with no error. Stripping the noise words down to the
-      // chapter's own distinctive name (e.g. "Jet") keeps the candidate pool small enough that the
-      // exact filter below can actually find the right chapter (verified live: "Jet" alone returns 67
-      // members that DO include "Jet BNI (München)").
-      const searchToken =
-        chapterName
-          .replace(/\bBNI\b/gi, '')
-          .replace(/\([^)]*\)/g, '')
-          .trim()
-          .split(/\s+/)[0] || chapterName;
-
-      const allResults: Array<{ site: BniSite; member: BniMember }> = [];
-      const failedSites: string[] = [];
-      let exactChapterMatch = false;
-      for (const site of sites) {
-        try {
-          const config = await discoverSiteConfig(site);
-          // Prefer the site's own chapter listing, when it has one: an exact match there gives the
-          // chapter's complete roster directly, skipping the keyword heuristic (and its cap) below.
-          // Tried against the caller's full chapterName first, then the same distinctive token used
-          // for the keyword fallback (the two rarely render identically — e.g. one may carry a
-          // "(City)" suffix the other doesn't).
-          const chapterOptions = await listChapterOptions(site).catch(() => []);
-          const chapterOption = findChapterOption(chapterOptions, chapterName) ?? findChapterOption(chapterOptions, searchToken);
-          const members = await searchMembers(
-            site,
-            config,
-            chapterOption ? { chapterId: chapterOption.id } : { keywords: searchToken }
-          );
-          if (chapterOption) exactChapterMatch = true;
-          for (const member of members) allResults.push({ site, member });
-        } catch (err) {
-          failedSites.push(`${site.id} (${err instanceof Error ? err.message : String(err)})`);
-        }
-      }
-
-      const nameNorm = chapterName.toLowerCase();
-      const chapterMembers = allResults.filter(
-        ({ member }) => member.chapter.toLowerCase().includes(nameNorm) || member.region.toLowerCase().includes(nameNorm)
-      );
-      const useResults = chapterMembers.length > 0 ? chapterMembers : allResults;
-      const notes =
-        coverageAndFailureNotes(sites.length, totalKnown, country, failedSites) +
-        (exactChapterMatch
-          ? ''
-          : '\n(No exact chapter listing found for this name — used keyword search instead, which may be incomplete or approximate. Try bni_list_chapters for the exact name.)');
+      const resolved = await resolveChapterMembers(country, chapterName);
+      if ('errorResponse' in resolved) return resolved.errorResponse;
+      const { useResults, chapterInfo, notes } = resolved.resolution;
 
       if (useResults.length === 0) {
         return { content: [{ type: 'text', text: `No members found for chapter "${chapterName}".${notes}` }] };
-      }
-
-      // Chapter meeting logistics, resolved via one representative member.
-      let chapterInfo: BniChapterInfo | null = null;
-      const representative = useResults[0];
-      try {
-        const repConfig = await discoverSiteConfig(representative.site);
-        const repDetail = await getMemberDetail(
-          representative.site,
-          repConfig,
-          representative.member.encryptedMemberId,
-          representative.member.name
-        );
-        if (repDetail?.chapterId) {
-          chapterInfo = await getChapterInfo(representative.site, repDetail.chapterId);
-        }
-      } catch {
-        chapterInfo = null;
       }
 
       let categories: Awaited<ReturnType<typeof getProfessionCategories>> = [];
@@ -784,6 +822,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ]
               .filter(Boolean)
               .join('\n'),
+          },
+        ],
+      };
+    }
+
+    if (name === 'bni_chapter_members') {
+      const { chapterName, country } = args as { chapterName: string; country: string };
+      const resolved = await resolveChapterMembers(country, chapterName);
+      if ('errorResponse' in resolved) return resolved.errorResponse;
+      const { useResults, chapterInfo, notes } = resolved.resolution;
+
+      if (useResults.length === 0) {
+        return { content: [{ type: 'text', text: `No members found for chapter "${chapterName}".${notes}` }] };
+      }
+
+      const sorted = [...useResults].sort((a, b) => a.member.name.localeCompare(b.member.name));
+      const text = sorted
+        .map(
+          ({ site, member }, i) =>
+            `${i + 1}. **${member.name}** | ${member.company} | ${member.profession} | ${member.city}${member.district ? ` (${member.district})` : ''} | Site: ${site.id} | ID: ${member.encryptedMemberId}`
+        )
+        .join('\n');
+
+      const countNote = chapterInfo?.totalMemberCount ? ` (officially reported: ${chapterInfo.totalMemberCount})` : '';
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `**Chapter: ${chapterInfo?.name ?? chapterName}** — ${useResults.length} member(s)${countNote}${notes}\n\n${text}`,
           },
         ],
       };

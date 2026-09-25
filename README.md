@@ -8,7 +8,8 @@ MCP server for searching BNI (Business Network International) members and chapte
 |---|---|
 | `bni_search` | Search members in a country (fans out across every registered site for that country) |
 | `bni_member_detail` | Full public profile: phone, email, website, chapter, chapter meeting info, and bio split into BNI's standard sections (My Business, Ideal Referral, Ideal Referral Partner, Top Problem Solved, Top Product, Favorite BNI Story) where the profile has them |
-| `bni_chapter_gaps` | Whitespace analysis for a chapter against the official BNI profession taxonomy — resolves the chapter exactly via `bni_list_chapters` where possible, instead of an approximate keyword search |
+| `bni_chapter_gaps` | Whitespace analysis for a chapter against the official BNI profession taxonomy — resolves the chapter exactly via `bni_list_chapters` where possible, instead of an approximate keyword search. Profession counts only, no member names (see `bni_chapter_members`) |
+| `bni_chapter_members` | Named roster for a chapter (name, company, profession, city per member) — same exact chapter resolution as `bni_chapter_gaps`, without the keyword-search/cap workaround |
 | `bni_list_countries` | Every registered country code and its known site(s) |
 | `bni_list_chapters` | Exact chapter names (and internal ids) for a country, where the site exposes them |
 | `bni_upcoming_events` | Public events (trainings, webinars, regional visitor days) |
