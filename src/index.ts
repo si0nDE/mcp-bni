@@ -45,19 +45,22 @@ function coverageAndFailureNotes(sites: number, totalKnown: number, country: str
   return coverage + failures;
 }
 
-// BNI's own member-search "keywords" field does broad, seemingly OR-based full-text matching
-// (confirmed live during Task 12 — see the bni_chapter_gaps handler below for the case where this
-// broke a result entirely). bni_search relays the caller's keywords verbatim, so a common or
-// multi-word term can silently return a large, effectively unfiltered result set that looks like a
-// normal successful search. Per the "fail clearly, never silently partial" design constraint, flag
-// this explicitly instead of staying silent about it — this does not change what's searched or
-// returned, only whether the caller is told a site's count is suspiciously high.
-const SWAMPED_RESULT_THRESHOLD = 200; // observed live per-site cap is ~250; this leaves margin.
+// BNI's own member-search "keywords" field does broad, seemingly OR-based full-text matching per
+// word (confirmed live during Task 12 — see the bni_chapter_gaps handler below for the case where
+// this broke a result entirely). bni_search now merges in each individual word's own fetch for a
+// multi-word query (see searchMembers's doc comment) since BNI's combined-phrase fetch alone was
+// live-verified to silently drop a true match — but each of those per-word fetches is itself
+// capped at ~250 raw rows per site (BNI's own cap). A common word (e.g. a frequent surname) can
+// still exceed that cap on its own, silently losing members outside whatever window BNI returns
+// for it. Per the "fail clearly, never silently partial" design constraint, flag this explicitly
+// instead of staying silent about it — this does not change what's searched or returned, only
+// whether the caller is told a site's count is suspiciously high.
+const SWAMPED_RESULT_THRESHOLD = 200; // a single per-word fetch caps at ~250; this leaves margin.
 
 function swampNote(perSiteCounts: Map<string, number>): string {
   const swamped = [...perSiteCounts.entries()].filter(([, count]) => count >= SWAMPED_RESULT_THRESHOLD).map(([id]) => id);
   if (swamped.length === 0) return '';
-  return `\n(Note: site(s) ${swamped.join(', ')} returned ${SWAMPED_RESULT_THRESHOLD}+ results for this keyword — BNI's search matches broadly across name/profession/company rather than requiring an exact/AND match, so a common or multi-word term can return a large, possibly unfocused result set. Try a more specific keyword or add "city" to narrow it down.)`;
+  return `\n(Note: site(s) ${swamped.join(', ')} returned ${SWAMPED_RESULT_THRESHOLD}+ results for this keyword — BNI's search matches broadly across name/profession/company rather than requiring an exact/AND match, and each word is capped at ~250 raw rows per site. A common name part (e.g. a frequent surname) can silently exceed that cap, so a "no match" result here isn't a guaranteed negative. Add "city" to narrow it down and reduce that risk.)`;
 }
 
 const DEFAULT_MAX_RESULTS = 20;
@@ -262,7 +265,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bni_search',
       description:
-        'Searches the public BNI member directory for a country. Fans out across every registered site for that country (capped; see bni_list_countries). BNI\'s own search matches each word in "keywords" independently (OR-style) up to 250 raw results per site; for a multi-word keywords this tool then narrows the raw matches down by matchMode before returning (default 20 results — raise maxResults for more).',
+        'Searches the public BNI member directory for a country. Fans out across every registered site for that country (capped; see bni_list_countries). BNI\'s own search matches each word in "keywords" independently (OR-style), each word capped at ~250 raw results per site; for a multi-word keywords this tool fetches every word individually and merges them (since BNI\'s own combined-phrase match can silently drop a true match) before narrowing the merged raw matches down by matchMode (default 20 results — raise maxResults for more).',
       inputSchema: {
         type: 'object',
         properties: {

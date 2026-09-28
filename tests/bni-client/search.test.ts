@@ -64,6 +64,52 @@ describe('searchMembers', () => {
     await expect(searchMembers(testSite, testConfig, {})).rejects.toThrow(/test-site/);
   });
 
+  it('merges in each individual word\'s results for a multi-word query, since BNI\'s own combined-phrase search can silently drop a member matching every word (live-verified 2026-09-28: a real "Michael Müller" search returned 233 raw rows and the literal string "Michael Müller" did not appear anywhere in that response, even though "Michael" alone and "Müller" alone each reliably found that exact person)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        const sentBody = String(init?.body ?? '');
+        const parameters = new URLSearchParams(new URLSearchParams(sentBody).get('parameters') ?? '');
+        const keywords = parameters.get('keywords');
+        const fixture =
+          keywords === 'Markus Beispiel'
+            ? 'multiword-combined.html' // combined query: does NOT include the true match
+            : keywords === 'Markus'
+              ? 'multiword-first.html'
+              : keywords === 'Beispiel'
+                ? 'multiword-last.html'
+                : (() => {
+                    throw new Error(`unexpected keywords: ${keywords}`);
+                  })();
+        const html = readFileSync(join(FIXTURES_DIR, fixture), 'utf-8');
+        return new Response(html, { status: 200 });
+      })
+    );
+
+    const members = await searchMembers(testSite, testConfig, { keywords: 'Markus Beispiel' });
+    const names = members.map((m) => m.name).sort();
+
+    // Union of all three fetches, deduped by encryptedMemberId (Markus Beispiel appears in both
+    // the "Markus" and "Beispiel" per-word fixtures under the same id, but only once here).
+    expect(names).toEqual(['Anke Beispiel', 'Anna Noise', 'Bernd Noise', 'Markus Beispiel', 'Markus Other']);
+
+    // The actual target is recoverable, even though it was absent from the combined-phrase fetch.
+    expect(matchesKeywords(members.find((m) => m.name === 'Markus Beispiel')!, 'Markus Beispiel', 'phrase')).toBe(
+      true
+    );
+  });
+
+  it('does not issue extra per-word fetches for a single-word (or empty) query', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      const html = readFileSync(join(FIXTURES_DIR, 'results.html'), 'utf-8');
+      return new Response(html, { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await searchMembers(testSite, testConfig, { keywords: 'consultant' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('scopes the query by chapterId instead of keywords when both are given', async () => {
     let sentBody = '';
     vi.stubGlobal(

@@ -33,12 +33,12 @@ export interface SearchParams {
 export type SearchMatchMode = 'phrase' | 'all' | 'any';
 
 /**
- * Client-side narrowing for callers of {@link searchMembers}. BNI's own member-search
- * "keywords" field matches each whitespace-separated word independently (OR-style) against
- * name/profession/company server-side — verified live (a two-word query like "Simon Fieber"
- * returns every "Simon" and every "Fieber", not just people named both, and can be >99% noise).
- * This only narrows an already-fetched result set down to what the caller likely meant; it
- * never asks the server for anything it didn't already return, so it can't hide a real match.
+ * Client-side narrowing for callers of {@link searchMembers}. A single-word "keywords" query
+ * matches broadly against name/profession/company server-side (OR-style, can be >99% noise —
+ * verified live, e.g. "Simon Fieber" as two separate single-word fetches returns every "Simon"
+ * and every "Fieber"). This narrows the already-fetched, merged result set (see
+ * {@link searchMembers} for why a multi-word query fetches per word instead of trusting BNI's own
+ * combined-phrase match) down to what the caller likely meant.
  */
 export function matchesKeywords(member: BniMember, keywords: string, mode: SearchMatchMode): boolean {
   const trimmed = keywords.trim();
@@ -88,7 +88,44 @@ function buildDetailBaseUrl(findMemberUrl: string): URL {
   return url;
 }
 
+/**
+ * BNI's own multi-word "keywords" match is not reliable: it is not a superset of what each word
+ * matches alone. Live-verified against bni.de (2026-09-28): a combined query for "Michael Müller"
+ * returned 233 raw rows, and the literal string "Michael Müller" did not appear anywhere in that
+ * response — even though "Michael" alone (243 raw) and "Müller" alone (135 raw) each reliably
+ * found that exact person. So a caller relying only on the combined-phrase fetch can silently miss
+ * a true match with no visible symptom (243/135/233 all look like perfectly normal counts). This
+ * supersedes the previous "OR-style, so combined can't hide a match" assumption recorded in
+ * {@link matchesKeywords} and {@link defaultMatchMode} below — that only holds for a single word.
+ *
+ * {@link searchMembers} therefore also fetches each individual word on its own for a multi-word
+ * query, and merges the union (deduped by encryptedMemberId) — single-word queries are the one
+ * primitive verified not to drop a real match, so this is the combination that can't hide one
+ * either. matchMode narrowing (see {@link matchesKeywords}) still runs over that merged, more
+ * complete set to filter back down to what the caller meant.
+ */
 export async function searchMembers(
+  site: BniSite,
+  config: BniSiteConfig,
+  params: SearchParams
+): Promise<BniMember[]> {
+  const members = await fetchMembersRaw(site, config, params);
+
+  const words = params.chapterId ? [] : (params.keywords?.trim().split(/\s+/).filter(Boolean) ?? []);
+  if (words.length <= 1) return members;
+
+  const merged = new Map<string, BniMember>();
+  for (const member of members) merged.set(member.encryptedMemberId, member);
+  for (const word of words) {
+    const extra = await fetchMembersRaw(site, config, { ...params, keywords: word });
+    for (const member of extra) {
+      if (!merged.has(member.encryptedMemberId)) merged.set(member.encryptedMemberId, member);
+    }
+  }
+  return [...merged.values()];
+}
+
+async function fetchMembersRaw(
   site: BniSite,
   config: BniSiteConfig,
   params: SearchParams
